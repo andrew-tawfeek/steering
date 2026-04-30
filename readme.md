@@ -79,6 +79,22 @@ Expected shape:
 }
 ```
 
+## Launch The Terminal Interface
+
+The `CLI-interface` branch adds a split-pane terminal UI:
+
+```bash
+./start.sh
+```
+
+`start.sh` creates/uses `.venv`, installs missing dependencies from
+`requirements.txt`, starts the TransformerLens backend if it is not already
+running, waits for `/health`, then opens the interface.
+
+The left pane is for chat with the current backend model. The right pane shows
+active steers and lets you replace, append, clear, refresh, and look up
+features while the backend is running.
+
 ## Smoke Test
 
 Terminal B:
@@ -202,6 +218,20 @@ Inside chat:
 | `/health` | Check backend status. |
 | `/exit` or `/quit` | Leave chat. |
 
+### `ui`
+
+Open the split-pane TUI directly if the backend is already running:
+
+```bash
+python steer.py ui
+```
+
+Common options:
+
+```bash
+python steer.py ui --server-url http://127.0.0.1:8000 --max-tokens 80 --temperature 0.8
+```
+
 ## tmux Workflow
 
 Existing sessions:
@@ -219,6 +249,7 @@ Recommended usage:
 | `steering-backend` | Keep `uvicorn server:app --host 127.0.0.1 --port 8000` running. |
 | `steering-impl` | Edit code and inspect files. |
 | `steering-tests` | Run tests and CLI smoke checks. |
+| `cli-interface-agent` | Headless Codex loop for ongoing TUI/accessibility work. |
 
 ## Configuration
 
@@ -279,6 +310,24 @@ source .venv/bin/activate
 python -m unittest discover -s tests
 python -m py_compile steer.py server.py steering/*.py tests/*.py
 python steer.py feature --layer 6 --feature-id 204
+```
+
+TUI smoke check:
+
+```bash
+python - <<'PY'
+import asyncio
+from steering.tui import SteeringTUI
+
+async def main():
+    app = SteeringTUI(server_url="http://127.0.0.1:8000", max_tokens=1, temperature=0, state_path=None)
+    async with app.run_test() as pilot:
+        await pilot.pause(0.1)
+        assert app.query_one("#prompt")
+        assert app.query_one("#steer-table")
+
+asyncio.run(main())
+PY
 ```
 
 ## Backend Notes

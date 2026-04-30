@@ -1,4 +1,5 @@
 fastapi
+textual
 uvicorn[standard]
 torch
 transformer-lens
