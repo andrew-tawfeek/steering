@@ -14,6 +14,7 @@ DEFAULT_MODEL_NAME = "gpt2-small"
 DEFAULT_SAE_RELEASE = "gpt2-small-res-jb"
 DEFAULT_SAE_ID_TEMPLATE = "blocks.{layer}.hook_resid_pre"
 DEFAULT_DEVICE = "cpu"
+DEFAULT_GENERATION_LOCK_TIMEOUT = 30.0
 
 
 @dataclass(frozen=True)
@@ -22,6 +23,7 @@ class BackendConfig:
     sae_release: str = DEFAULT_SAE_RELEASE
     sae_id_template: str = DEFAULT_SAE_ID_TEMPLATE
     device: str = DEFAULT_DEVICE
+    generation_lock_timeout: float = DEFAULT_GENERATION_LOCK_TIMEOUT
     state_path: Path | None = None
 
     @classmethod
@@ -31,6 +33,10 @@ class BackendConfig:
             sae_release=os.environ.get("STEERING_SAE_RELEASE", DEFAULT_SAE_RELEASE),
             sae_id_template=os.environ.get("STEERING_SAE_ID_TEMPLATE", DEFAULT_SAE_ID_TEMPLATE),
             device=os.environ.get("STEERING_DEVICE", DEFAULT_DEVICE),
+            generation_lock_timeout=parse_float_env(
+                "STEERING_GENERATION_LOCK_TIMEOUT",
+                DEFAULT_GENERATION_LOCK_TIMEOUT,
+            ),
             state_path=state_path,
         )
 
@@ -59,6 +65,7 @@ class TransformerLensSteeringBackend:
             sae_release=config.sae_release,
             sae_id_template=config.sae_id_template,
             device=device,
+            generation_lock_timeout=config.generation_lock_timeout,
             state_path=config.state_path,
         )
         self.model = HookedTransformer.from_pretrained(
@@ -74,6 +81,7 @@ class TransformerLensSteeringBackend:
             "sae_release": self.config.sae_release,
             "sae_id_template": self.config.sae_id_template,
             "device": self.config.device,
+            "busy": self._lock.locked(),
         }
 
     def generate(
@@ -93,22 +101,26 @@ class TransformerLensSteeringBackend:
             random.seed(seed)
             self.torch.manual_seed(seed)
 
-        with self._lock, self.torch.inference_mode():
-            tokens = self.model.to_tokens(prompt)
-            generated: list[int] = []
-            for _ in range(max_new_tokens):
-                state = load_state(self.config.state_path)
-                hooks = self._hooks_for_state(state)
-                logits = self.model.run_with_hooks(
-                    tokens,
-                    return_type="logits",
-                    fwd_hooks=hooks,
-                )
-                next_token = self._sample_next_token(logits[0, -1], temperature)
-                token_id = int(next_token.item())
-                generated.append(token_id)
-                tokens = self.torch.cat([tokens, next_token.reshape(1, 1)], dim=1)
-                yield self.model.to_string([token_id])
+        tokens = self.model.to_tokens(prompt)
+        for _ in range(max_new_tokens):
+            state = load_state(self.config.state_path)
+            if not self._lock.acquire(timeout=self.config.generation_lock_timeout):
+                raise SteeringError("another generation is still running; wait or restart the backend")
+            try:
+                with self.torch.inference_mode():
+                    hooks = self._hooks_for_state(state)
+                    logits = self.model.run_with_hooks(
+                        tokens,
+                        return_type="logits",
+                        fwd_hooks=hooks,
+                    )
+                    next_token = self._sample_next_token(logits[0, -1], temperature)
+                    token_id = int(next_token.item())
+                    tokens = self.torch.cat([tokens, next_token.reshape(1, 1)], dim=1)
+            finally:
+                self._lock.release()
+
+            yield self.model.to_string([token_id])
 
     def _hooks_for_state(self, state: SteeringState) -> list[tuple[str, Callable]]:
         if state.is_empty:
@@ -173,6 +185,19 @@ def resolve_device(torch: Any, requested: str) -> str:
     if torch.cuda.is_available():
         return "cuda"
     return "cpu"
+
+
+def parse_float_env(name: str, default: float) -> float:
+    raw_value = os.environ.get(name)
+    if raw_value is None or not raw_value.strip():
+        return default
+    try:
+        value = float(raw_value)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be a number") from exc
+    if value <= 0:
+        raise RuntimeError(f"{name} must be greater than 0")
+    return value
 
 
 def hook_name_for_sae(sae: Any, fallback: str) -> str:

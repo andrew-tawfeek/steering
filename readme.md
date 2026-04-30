@@ -73,6 +73,7 @@ Expected shape:
 ```json
 {
   "backend": "transformer-lens",
+  "busy": false,
   "device": "cpu",
   "model_name": "gpt2-small",
   "sae_id_template": "blocks.{layer}.hook_resid_pre",
@@ -446,6 +447,8 @@ Environment variables:
 | `STEERING_STATE_PATH` | `.steering/state.json` | Shared steering state path. |
 | `STEERING_FEATURE_CACHE_PATH` | `.steering/feature-cache.sqlite3` | SQLite cache for Neuronpedia labels. |
 | `STEERING_SERVER_URL` | `http://127.0.0.1:8000` | CLI target server. |
+| `STEERING_CLIENT_TIMEOUT` | `60` | Seconds before a CLI/UI request gives up. |
+| `STEERING_GENERATION_LOCK_TIMEOUT` | `30` | Seconds a generation waits for another token compute to finish. |
 
 TransformerLens currently warns that MPS may produce incorrect results with
 PyTorch 2.11.0, and in this stack it can also leave a generation request stuck

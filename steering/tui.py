@@ -1009,6 +1009,7 @@ class SteeringTUI(App):
         self._call_from_worker(self._apply_health_result, text, "success", model_name)
 
     def _generate_thread(self, prompt: str, max_tokens: int, temperature: float) -> None:
+        chunks = None
         try:
             chunks = self.client.generate(
                 prompt=prompt,
@@ -1063,6 +1064,9 @@ class SteeringTUI(App):
             self._call_from_worker(self.log_chat, f"[bold red]Generation failed:[/bold red] {exc}")
             self._call_from_worker(self._set_generation_status, str(exc), "error")
         finally:
+            close = getattr(chunks, "close", None)
+            if callable(close):
+                close()
             self._call_from_worker(self._finish_generation)
 
     def _lookup_thread(self, sae_id: str, feature_id: int) -> None:
@@ -1622,7 +1626,7 @@ class SteeringTUI(App):
         except NoMatches:
             return
         preview.display = True
-        preview.update(Text(f"{model_name} is starting..."))
+        preview.update(Text(f"{model_name} is preparing the next token..."))
 
     def _append_stream_chunk(self, chunk: str) -> None:
         self._set_stream_text(self._stream_text + chunk)

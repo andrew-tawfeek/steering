@@ -8,6 +8,7 @@ from urllib import error, request
 
 
 DEFAULT_SERVER_URL = "http://127.0.0.1:8000"
+DEFAULT_CLIENT_TIMEOUT = 60.0
 
 
 class LocalServerError(RuntimeError):
@@ -17,14 +18,17 @@ class LocalServerError(RuntimeError):
 @dataclass(frozen=True)
 class LocalServerClient:
     base_url: str = DEFAULT_SERVER_URL
-    timeout: float = 300.0
+    timeout: float = DEFAULT_CLIENT_TIMEOUT
 
     @classmethod
     def from_env(cls, base_url: str | None = None) -> "LocalServerClient":
         raw_url = base_url or os.environ.get("STEERING_SERVER_URL") or DEFAULT_SERVER_URL
         if not raw_url.startswith(("http://", "https://")):
             raw_url = f"http://{raw_url}"
-        return cls(base_url=raw_url.rstrip("/"))
+        return cls(
+            base_url=raw_url.rstrip("/"),
+            timeout=parse_timeout_env("STEERING_CLIENT_TIMEOUT", DEFAULT_CLIENT_TIMEOUT),
+        )
 
     def health(self) -> dict[str, Any]:
         return self._json_request("GET", "/health")
@@ -110,3 +114,16 @@ class LocalServerClient:
             headers=headers,
             method=method,
         )
+
+
+def parse_timeout_env(name: str, default: float) -> float:
+    raw_value = os.environ.get(name)
+    if raw_value is None or not raw_value.strip():
+        return default
+    try:
+        value = float(raw_value)
+    except ValueError as exc:
+        raise LocalServerError(f"{name} must be a number") from exc
+    if value <= 0:
+        raise LocalServerError(f"{name} must be greater than 0")
+    return value
