@@ -92,18 +92,20 @@ The primary demo path is the split-pane terminal UI:
 `requirements.txt`, starts the TransformerLens backend if it is not already
 running, waits for `/health`, then opens the interface.
 
-The left pane is for chat with the current backend model. The right pane shows
-active steers, feature lookup controls, and the local feature-label cache.
-Steering changes are written to `.steering/state.json`; the backend reads that
-state during generation.
+The left pane is a text-completion surface for the current backend model. The
+default backend is raw `gpt2-small`, not a chat-tuned assistant, so use prompts
+that look like text to continue rather than questions expecting a helpful reply.
+The right pane shows active steers, feature lookup controls, and the local
+feature-label cache. Steering changes are written to `.steering/state.json`;
+the backend reads that state during generation.
 
 Useful keys:
 
 | Key | Action |
 |-----|--------|
-| `F2` | Focus the chat prompt. |
+| `F2` | Focus the completion prompt. |
 | `F3` | Focus active steers. |
-| `F6` | Send the current prompt. |
+| `F6` | Continue the current prompt. |
 | `F8` | Clear all active steers after confirmation. |
 | `F10` | List cache sources for the selected model. |
 | `F11` | Search cached labels. |
@@ -125,10 +127,10 @@ download SAE Lens weights.
 
 Inside the interface:
 
-1. In the left chat prompt, ask:
+1. In the left completion prompt, enter:
 
    ```text
-   Write one short sentence about today's weather.
+   Today the weather report says
    ```
 
 2. In the right pane, set a manual steer:
@@ -141,7 +143,7 @@ Inside the interface:
 
    Press `Set Only`.
 
-3. Send the same weather prompt again from the left pane and compare the
+3. Continue the same weather prompt again from the left pane and compare the
    continuation with the baseline.
 
 4. Try the cache workflow:
@@ -357,6 +359,9 @@ python steer.py generate --server-url http://127.0.0.1:8000 "Hello"
 python steer.py chat
 ```
 
+This command is a raw completion loop for the TransformerLens backend. It is
+named `chat` for convenience, but `gpt2-small` is not instruction tuned.
+
 Inside chat:
 
 | Command | Effect |
@@ -377,8 +382,10 @@ python steer.py ui
 Common options:
 
 ```bash
-python steer.py ui --server-url http://127.0.0.1:8000 --max-tokens 80 --temperature 0.8
+python steer.py ui --server-url http://127.0.0.1:8000 --max-tokens 80 --temperature 0
 ```
+
+Use `--temperature 0` for deterministic demos with the raw GPT-2 backend.
 
 ### `feature-cache`
 

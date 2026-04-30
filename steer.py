@@ -32,6 +32,7 @@ from steering.state import (
 
 
 DEFAULT_SERVER_URL = "http://127.0.0.1:8000"
+DEFAULT_TEMPERATURE = 0.0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -75,26 +76,26 @@ def build_parser() -> argparse.ArgumentParser:
     clear.add_argument("--json", action="store_true", help="print JSON state")
     clear.set_defaults(func=cmd_clear)
 
-    generate = subparsers.add_parser("generate", help="generate through the local TransformerLens server")
+    generate = subparsers.add_parser("generate", help="continue text through the local TransformerLens server")
     generate.add_argument("prompt", nargs="?", help="prompt text; stdin is used when omitted")
     generate.add_argument("--server-url", default=DEFAULT_SERVER_URL)
     generate.add_argument("--max-tokens", type=int, default=60)
-    generate.add_argument("--temperature", type=float, default=0.8)
+    generate.add_argument("--temperature", type=float, default=DEFAULT_TEMPERATURE)
     generate.add_argument("--seed", type=int, default=None)
     generate.add_argument("--no-stream", action="store_true", help="wait for the full response before printing")
     generate.set_defaults(func=cmd_generate)
 
-    chat = subparsers.add_parser("chat", help="interactive chat through the local TransformerLens server")
+    chat = subparsers.add_parser("chat", help="interactive raw-completion loop through the local TransformerLens server")
     chat.add_argument("--server-url", default=DEFAULT_SERVER_URL)
     chat.add_argument("--max-tokens", type=int, default=80)
-    chat.add_argument("--temperature", type=float, default=0.8)
+    chat.add_argument("--temperature", type=float, default=DEFAULT_TEMPERATURE)
     chat.add_argument("--seed", type=int, default=None)
     chat.set_defaults(func=cmd_chat)
 
-    ui = subparsers.add_parser("ui", help="open the split-pane terminal interface")
+    ui = subparsers.add_parser("ui", help="open the split-pane completion and steering interface")
     ui.add_argument("--server-url", default=DEFAULT_SERVER_URL)
     ui.add_argument("--max-tokens", type=int, default=80)
-    ui.add_argument("--temperature", type=float, default=0.8)
+    ui.add_argument("--temperature", type=float, default=DEFAULT_TEMPERATURE)
     ui.set_defaults(func=cmd_ui)
 
     health = subparsers.add_parser("health", help="check the local TransformerLens server")
@@ -216,6 +217,7 @@ def cmd_chat(args: argparse.Namespace) -> int:
     client = LocalServerClient.from_env(args.server_url)
     print(f"server: {client.base_url}")
     print(f"state: {resolved_state_path(args)}")
+    print("backend mode: raw completion, not chat-tuned conversation")
     print("type /show, /clear, /health, or /exit")
     while True:
         try:

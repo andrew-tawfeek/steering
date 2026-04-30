@@ -39,6 +39,7 @@ CLEAR_CONFIRM_SECONDS = 4.0
 STREAM_FLUSH_SECONDS = 0.08
 STREAM_FLUSH_CHARS = 32
 STREAM_PREVIEW_CHARS = 1800
+DEFAULT_TEMPERATURE = 0.0
 FORM_INPUT_IDS = frozenset({"feature-id", "strength", "layers", "sae-id", "label", "model-id"})
 GENERATION_INPUT_IDS = frozenset({"max-tokens", "temperature"})
 CACHE_INPUT_IDS = frozenset(
@@ -194,7 +195,7 @@ class SteeringTUI(App):
         ("f3", "focus_steers", "Steers"),
         ("f4", "focus_feature", "Feature"),
         ("f5", "refresh_state", "Refresh"),
-        ("f6", "send_prompt", "Send"),
+        ("f6", "send_prompt", "Continue"),
         ("f7", "lookup_feature", "Lookup"),
         ("f8", "clear_steers", "Clear all"),
         ("f9", "check_backend", "Backend"),
@@ -256,7 +257,7 @@ class SteeringTUI(App):
         with Horizontal(id="main"):
             with Vertical(id="chat-pane"):
                 yield Static("Backend: checking...", id="status")
-                yield Label("Chat", classes="pane-title")
+                yield Label("Completion", classes="pane-title")
                 with Horizontal(id="generation-settings"):
                     yield Label("Tokens", classes="inline-label")
                     yield Input(
@@ -270,25 +271,25 @@ class SteeringTUI(App):
                     yield Label("Temp", classes="inline-label")
                     yield Input(
                         f"{self.temperature:g}",
-                        placeholder="0.8",
+                        placeholder=str(DEFAULT_TEMPERATURE),
                         id="temperature",
                         name="Temperature",
-                        tooltip="Sampling temperature. Use 0 for deterministic output.",
+                        tooltip="Sampling temperature. Lower values make GPT-2 less random; use 0 for greedy output.",
                         compact=True,
                     )
-                yield Static("Ready.", id="generation-status")
+                yield Static("Raw GPT-2 continuation mode.", id="generation-status")
                 yield RichLog(id="chat-log", wrap=True, highlight=True, markup=True)
                 yield Static("", id="stream-preview")
                 yield Input(
-                    placeholder="Ask the current model...",
+                    placeholder="Enter text for the model to continue...",
                     id="prompt",
                     name="Prompt",
-                    tooltip="Press Enter or F6 to send this prompt.",
+                    tooltip="Press Enter or F6 to continue this text with the backend model.",
                 )
                 with Horizontal(classes="row"):
-                    yield Button("Send", id="send", variant="primary", tooltip="Send the prompt to the backend.")
+                    yield Button("Continue", id="send", variant="primary", tooltip="Continue the prompt with the backend model.")
                     yield Button("Health", id="check-health", tooltip="Refresh backend model status.")
-                    yield Button("Clear Chat", id="clear-chat", tooltip="Clear the chat transcript.")
+                    yield Button("Clear Log", id="clear-chat", tooltip="Clear the generation log.")
             with VerticalScroll(id="steer-pane"):
                 yield Label("Active Steers", classes="pane-title")
                 yield DataTable(id="steer-table")
@@ -994,7 +995,7 @@ class SteeringTUI(App):
             health = self.client.health()
             model_name = str(health.get("model_name", "unknown"))
             text = (
-                f"Backend: {model_name} "
+                f"Backend: {model_name} raw completion "
                 f"on {health.get('device', 'unknown')} | {self.client.base_url}"
             )
         except Exception as exc:
@@ -1034,8 +1035,8 @@ class SteeringTUI(App):
             text = "".join(parts).strip()
             if not text:
                 text = "[dim](empty response)[/dim]"
-            self._call_from_worker(self.log_chat, f"[bold green]LLM:[/bold green] {text}")
-            self._call_from_worker(self._set_generation_status, "Ready.", "success")
+            self._call_from_worker(self.log_chat, f"[bold green]Completion:[/bold green] {text}")
+            self._call_from_worker(self._set_generation_status, "Raw completion ready.", "success")
         except LocalServerError as exc:
             self._call_from_worker(self.log_chat, f"[bold red]Generation failed:[/bold red] {exc}")
             self._call_from_worker(self._set_generation_status, str(exc), "error")
@@ -1559,7 +1560,10 @@ class SteeringTUI(App):
         if self._backend_available is False:
             self._set_generation_status("Backend unavailable.", "error")
         else:
-            self._set_generation_status("Ready.", "success" if self._backend_available else None)
+            self._set_generation_status(
+                "Raw completion ready." if self._backend_available else "Raw GPT-2 continuation mode.",
+                "success" if self._backend_available else None,
+            )
 
     def _set_form_status(self, message: str, state: str | None = None) -> None:
         try:
@@ -1827,7 +1831,7 @@ def run_tui(
     *,
     server_url: str = "http://127.0.0.1:8000",
     max_tokens: int = 80,
-    temperature: float = 0.8,
+    temperature: float = DEFAULT_TEMPERATURE,
     state_path: Path | None = None,
 ) -> None:
     SteeringTUI(
