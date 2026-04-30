@@ -23,34 +23,48 @@ class SteerItem:
     strength: float
     layers: tuple[int, ...]
     label: str | None = None
+    model_id: str | None = None
+    sae_id: str | None = None
 
     def __post_init__(self) -> None:
         if self.feature_id < 0:
             raise SteeringError("feature_id must be >= 0")
-        if not self.layers:
-            raise SteeringError("at least one layer is required")
+        if not self.layers and not self.sae_id:
+            raise SteeringError("at least one layer or sae_id is required")
         if any(layer < 0 for layer in self.layers):
             raise SteeringError("layers must be >= 0")
         if self.label is not None and not self.label.strip():
             raise SteeringError("label cannot be blank")
+        if self.model_id is not None and not self.model_id.strip():
+            raise SteeringError("model_id cannot be blank")
+        if self.sae_id is not None and not self.sae_id.strip():
+            raise SteeringError("sae_id cannot be blank")
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "SteerItem":
         try:
             feature_id = int(data["feature_id"])
             strength = float(data["strength"])
-            layers = tuple(int(layer) for layer in data["layers"])
+            layers = tuple(int(layer) for layer in data.get("layers", []))
         except (KeyError, TypeError, ValueError) as exc:
             raise SteeringError(f"invalid steer item: {data!r}") from exc
 
         label = data.get("label")
         if label is not None:
             label = str(label)
+        model_id = data.get("model_id")
+        if model_id is not None:
+            model_id = str(model_id)
+        sae_id = data.get("sae_id")
+        if sae_id is not None:
+            sae_id = str(sae_id)
         return cls(
             feature_id=feature_id,
             strength=strength,
             layers=layers,
             label=label,
+            model_id=model_id,
+            sae_id=sae_id,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -61,6 +75,10 @@ class SteerItem:
         }
         if self.label:
             data["label"] = self.label
+        if self.model_id:
+            data["model_id"] = self.model_id
+        if self.sae_id:
+            data["sae_id"] = self.sae_id
         return data
 
 
@@ -122,7 +140,10 @@ def default_state_path(cwd: Path | None = None) -> Path:
     return base / DEFAULT_STATE_DIR / DEFAULT_STATE_FILE
 
 
-def parse_layers(raw: str) -> tuple[int, ...]:
+def parse_layers(raw: str | None) -> tuple[int, ...]:
+    if raw is None:
+        return tuple()
+
     layers: list[int] = []
     for part in raw.replace(" ", ",").split(","):
         value = part.strip()

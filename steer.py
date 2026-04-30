@@ -6,8 +6,14 @@ import json
 from pathlib import Path
 import sys
 
+from steering.local_client import LocalServerClient, LocalServerError
+from steering.neuronpedia_client import (
+    DEFAULT_STEERING_MODEL,
+    NeuronpediaClient,
+    NeuronpediaError,
+    summarize_feature,
+)
 from steering.ollama_client import OllamaClient, OllamaError
-from steering.prompt import build_steering_system_prompt
 from steering.state import (
     SteerItem,
     SteeringError,
@@ -19,7 +25,7 @@ from steering.state import (
 )
 
 
-DEFAULT_MODEL = "gemma3:270m"
+DEFAULT_SERVER_URL = "http://127.0.0.1:8000"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -27,14 +33,14 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         return args.func(args)
-    except (SteeringError, OllamaError) as exc:
+    except (SteeringError, LocalServerError, NeuronpediaError, OllamaError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Steer a local Ollama-backed LLM with shared live state.",
+        description="Live SAE feature steering for a local hookable LLM backend.",
     )
     parser.add_argument(
         "--state-path",
@@ -44,11 +50,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    update = subparsers.add_parser("update", help="replace or append a steer")
+    update = subparsers.add_parser("update", help="replace or append a feature steer")
     update.add_argument("--feature-id", required=True, type=int)
     update.add_argument("--strength", required=True, type=float)
-    update.add_argument("--layers", required=True, help="comma-separated layer list")
-    update.add_argument("--label", default=None, help="optional semantic label for Ollama prompt steering")
+    update.add_argument("--layers", default=None, help="comma-separated layer list, such as 6 or 6,8,10")
+    update.add_argument("--sae-id", default=None, help="explicit SAE id, such as blocks.6.hook_resid_pre")
+    update.add_argument("--model-id", default=None, help="source model id for metadata, such as gpt2-small")
+    update.add_argument("--label", default=None, help="optional human-readable note from Neuronpedia")
     update.add_argument("--append", action="store_true", help="append instead of replacing current state")
     update.add_argument("--json", action="store_true", help="print JSON state")
     update.set_defaults(func=cmd_update)
@@ -61,39 +69,54 @@ def build_parser() -> argparse.ArgumentParser:
     clear.add_argument("--json", action="store_true", help="print JSON state")
     clear.set_defaults(func=cmd_clear)
 
-    models = subparsers.add_parser("models", help="list local Ollama models")
-    models.add_argument("--base-url", default=None, help="Ollama API URL, defaults to OLLAMA_HOST or localhost")
-    models.set_defaults(func=cmd_models)
-
-    generate = subparsers.add_parser("generate", help="generate through Ollama using current steering state")
+    generate = subparsers.add_parser("generate", help="generate through the local TransformerLens server")
     generate.add_argument("prompt", nargs="?", help="prompt text; stdin is used when omitted")
-    generate.add_argument("--model", default=DEFAULT_MODEL)
-    generate.add_argument("--base-url", default=None, help="Ollama API URL, defaults to OLLAMA_HOST or localhost")
-    generate.add_argument("--max-tokens", type=int, default=120)
-    generate.add_argument("--temperature", type=float, default=0.7)
-    generate.add_argument(
-        "--no-stream",
-        action="store_true",
-        help="wait for the full response before printing",
-    )
+    generate.add_argument("--server-url", default=DEFAULT_SERVER_URL)
+    generate.add_argument("--max-tokens", type=int, default=60)
+    generate.add_argument("--temperature", type=float, default=0.8)
+    generate.add_argument("--seed", type=int, default=None)
+    generate.add_argument("--no-stream", action="store_true", help="wait for the full response before printing")
     generate.set_defaults(func=cmd_generate)
 
-    chat = subparsers.add_parser("chat", help="interactive Ollama chat that rereads steering state each turn")
-    chat.add_argument("--model", default=DEFAULT_MODEL)
-    chat.add_argument("--base-url", default=None, help="Ollama API URL, defaults to OLLAMA_HOST or localhost")
-    chat.add_argument("--max-tokens", type=int, default=160)
-    chat.add_argument("--temperature", type=float, default=0.7)
+    chat = subparsers.add_parser("chat", help="interactive chat through the local TransformerLens server")
+    chat.add_argument("--server-url", default=DEFAULT_SERVER_URL)
+    chat.add_argument("--max-tokens", type=int, default=80)
+    chat.add_argument("--temperature", type=float, default=0.8)
+    chat.add_argument("--seed", type=int, default=None)
     chat.set_defaults(func=cmd_chat)
+
+    health = subparsers.add_parser("health", help="check the local TransformerLens server")
+    health.add_argument("--server-url", default=DEFAULT_SERVER_URL)
+    health.set_defaults(func=cmd_health)
+
+    feature = subparsers.add_parser("feature", help="look up feature metadata from Neuronpedia")
+    feature.add_argument("--feature-id", required=True, type=int)
+    feature.add_argument("--model-id", default=DEFAULT_STEERING_MODEL)
+    feature.add_argument("--sae-id", default=None, help="Neuronpedia SAE id, such as 6-res-jb")
+    feature.add_argument("--layer", type=int, default=None, help="layer shorthand for GPT-2 res-jb, such as 6")
+    feature.add_argument("--base-url", default=None)
+    feature.add_argument("--json", action="store_true")
+    feature.set_defaults(func=cmd_feature)
+
+    ollama_models = subparsers.add_parser(
+        "ollama-models",
+        help="list Ollama models; Ollama is not used for feature steering",
+    )
+    ollama_models.add_argument("--base-url", default=None)
+    ollama_models.set_defaults(func=cmd_ollama_models)
 
     return parser
 
 
 def cmd_update(args: argparse.Namespace) -> int:
+    layers = parse_layers(args.layers)
     item = SteerItem(
         feature_id=args.feature_id,
         strength=args.strength,
-        layers=parse_layers(args.layers),
+        layers=layers,
         label=args.label,
+        model_id=args.model_id,
+        sae_id=args.sae_id,
     )
     state = update_state(item, append=args.append, path=args.state_path)
     if args.json:
@@ -123,33 +146,16 @@ def cmd_clear(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_models(args: argparse.Namespace) -> int:
-    client = OllamaClient.from_env(args.base_url)
-    data = client.tags()
-    models = data.get("models", [])
-    if not models:
-        print("no local Ollama models found")
-        return 0
-    for model in models:
-        name = model.get("name", "<unknown>")
-        size = model.get("size", 0)
-        print(f"{name}\t{human_size(size)}")
-    return 0
-
-
 def cmd_generate(args: argparse.Namespace) -> int:
     prompt = args.prompt if args.prompt is not None else sys.stdin.read().strip()
     if not prompt:
         raise SteeringError("prompt is required")
-    state = load_state(args.state_path)
-    system_prompt = build_steering_system_prompt(state)
-    client = OllamaClient.from_env(args.base_url)
+    client = LocalServerClient.from_env(args.server_url)
     for chunk in client.generate(
-        model=args.model,
         prompt=prompt,
-        system=system_prompt,
-        max_tokens=args.max_tokens,
+        max_new_tokens=args.max_tokens,
         temperature=args.temperature,
+        seed=args.seed,
         stream=not args.no_stream,
     ):
         print(chunk, end="", flush=True)
@@ -158,10 +164,10 @@ def cmd_generate(args: argparse.Namespace) -> int:
 
 
 def cmd_chat(args: argparse.Namespace) -> int:
-    client = OllamaClient.from_env(args.base_url)
-    print(f"model: {args.model}")
+    client = LocalServerClient.from_env(args.server_url)
+    print(f"server: {client.base_url}")
     print(f"state: {resolved_state_path(args)}")
-    print("type /show, /clear, or /exit")
+    print("type /show, /clear, /health, or /exit")
     while True:
         try:
             prompt = input("\n> ").strip()
@@ -179,19 +185,56 @@ def cmd_chat(args: argparse.Namespace) -> int:
             clear_state(args.state_path)
             print("cleared")
             continue
+        if prompt == "/health":
+            print(json.dumps(client.health(), indent=2, sort_keys=True))
+            continue
 
-        state = load_state(args.state_path)
-        system_prompt = build_steering_system_prompt(state)
         for chunk in client.generate(
-            model=args.model,
             prompt=prompt,
-            system=system_prompt,
-            max_tokens=args.max_tokens,
+            max_new_tokens=args.max_tokens,
             temperature=args.temperature,
+            seed=args.seed,
             stream=True,
         ):
             print(chunk, end="", flush=True)
         print()
+
+
+def cmd_health(args: argparse.Namespace) -> int:
+    client = LocalServerClient.from_env(args.server_url)
+    print(json.dumps(client.health(), indent=2, sort_keys=True))
+    return 0
+
+
+def cmd_feature(args: argparse.Namespace) -> int:
+    sae_id = args.sae_id
+    if sae_id is None:
+        if args.layer is None:
+            raise SteeringError("provide either --sae-id or --layer")
+        sae_id = f"{args.layer}-res-jb"
+
+    client = NeuronpediaClient.from_env(args.base_url)
+    data = client.feature(args.model_id, sae_id, args.feature_id)
+    if args.json:
+        print(json.dumps(data, indent=2, sort_keys=True))
+    else:
+        print(summarize_feature(data))
+    return 0
+
+
+def cmd_ollama_models(args: argparse.Namespace) -> int:
+    client = OllamaClient.from_env(args.base_url)
+    data = client.tags()
+    models = data.get("models", [])
+    if not models:
+        print("no local Ollama models found")
+        return 0
+    print("Ollama models are listed for reference only; they are not steerable by this CLI.")
+    for model in models:
+        name = model.get("name", "<unknown>")
+        size = model.get("size", 0)
+        print(f"{name}\t{human_size(size)}")
+    return 0
 
 
 def format_state(state) -> str:
@@ -200,11 +243,13 @@ def format_state(state) -> str:
 
     lines = [f"updated_at: {state.updated_at}", "active steers:"]
     for index, item in enumerate(state.items, start=1):
-        layers = ",".join(str(layer) for layer in item.layers)
+        layers = ",".join(str(layer) for layer in item.layers) if item.layers else "-"
+        model = f" model={item.model_id}" if item.model_id else ""
+        sae = f" sae={item.sae_id}" if item.sae_id else ""
         label = f" label={item.label!r}" if item.label else ""
         lines.append(
             f"  {index}. feature_id={item.feature_id} strength={item.strength:g} "
-            f"layers={layers}{label}"
+            f"layers={layers}{model}{sae}{label}"
         )
     return "\n".join(lines)
 

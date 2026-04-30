@@ -1,1 +1,5 @@
-# The initial Ollama steering CLI uses only the Python standard library.
+fastapi
+uvicorn[standard]
+torch
+transformer-lens
+sae-lens

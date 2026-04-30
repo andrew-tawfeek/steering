@@ -1,247 +1,202 @@
 # Steering CLI
 
-A local steering CLI for experimenting with live control of an Ollama-backed
-LLM on macOS.
+A local CLI and server for live SAE feature steering.
 
-The current implementation keeps steering state in a shared JSON file and lets
-one terminal update that state while another terminal generates or chats with a
-local Ollama model.
+The intended runtime is **not Ollama**. Ollama is useful for ordinary local
+generation, but it does not expose hidden activations or residual-stream hooks,
+so it cannot perform the feature steering described by Neuronpedia SAE pages.
 
-## Current Backend
+This project uses:
 
-Ollama does not expose transformer residual streams, SAE decoder vectors, or
-per-layer forward hooks through its public API. Because of that, this backend
-uses **prompt-level steering**: the CLI preserves the intended steering shape
-of `feature_id`, `strength`, and `layers`, then converts active steers into a
-system prompt for Ollama.
+- **TransformerLens** for a hookable local transformer runtime.
+- **SAE Lens** for loading pretrained sparse autoencoders and decoder vectors.
+- **Neuronpedia** as the feature catalog and metadata source.
 
-This gives the project a working local control loop now, while keeping the
-state format ready for a later true SAE backend.
+## How It Works
+
+1. `server.py` loads a local TransformerLens model, defaulting to `gpt2-small`.
+2. The server loads SAE Lens SAEs on demand, defaulting to `gpt2-small-res-jb`.
+3. `steer.py update` writes active feature steers into `.steering/state.json`.
+4. During generation, the server rereads that state and adds:
+
+```text
+strength * SAE.W_dec[feature_id]
+```
+
+to the configured residual-stream hook point.
+
+For the default GPT-2 setup, `--layers 6` maps to:
+
+```text
+blocks.6.hook_resid_pre
+```
+
+and the matching Neuronpedia page is:
+
+```text
+https://www.neuronpedia.org/gpt2-small/6-res-jb/<feature-id>
+```
 
 ## Requirements
 
 - macOS
 - Python 3.11 or newer
-- Ollama installed and running
-- At least one local Ollama model
+- Enough disk space for GPT-2 small and SAE downloads
 
-The current CLI uses only the Python standard library.
-
-## Quick Start
-
-Start Ollama if it is not already running:
+Install dependencies:
 
 ```bash
-ollama serve
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
 ```
 
-In this repo, list available local models:
+On Apple Silicon, PyTorch should use MPS by default through the configured
+backend device. You can force CPU if needed:
 
 ```bash
-python3 steer.py models
+export STEERING_DEVICE=cpu
 ```
 
-Add a steer:
+## Run
+
+Terminal A starts the hookable backend:
 
 ```bash
-python3 steer.py update --feature-id 204 --strength 30 --layers 6 --label "Python code"
+source .venv/bin/activate
+uvicorn server:app --host 127.0.0.1 --port 8000
 ```
 
-Show active steering state:
+The first launch downloads model and SAE weights.
+
+Terminal B controls steering:
 
 ```bash
-python3 steer.py show
-```
-
-Generate through Ollama using the active steering state:
-
-```bash
-python3 steer.py generate --model gemma3:270m "Say hello in one short sentence."
-```
-
-Clear all steers:
-
-```bash
+source .venv/bin/activate
+python3 steer.py health
+python3 steer.py feature --layer 6 --feature-id 204
+python3 steer.py update --feature-id 204 --strength 30 --layers 6
+python3 steer.py generate "The weather today is" --max-tokens 40
 python3 steer.py clear
 ```
 
-## Two-Terminal Usage
-
-Terminal A runs Ollama:
+Existing tmux lanes for this repo:
 
 ```bash
-ollama serve
-```
-
-Terminal B runs the steering CLI:
-
-```bash
-python3 steer.py update --feature-id 204 --strength 30 --layers 6 --label "Python code"
-python3 steer.py generate --model gemma3:270m "Write a short weather report."
-python3 steer.py clear
-```
-
-For an interactive workflow, run chat in one terminal:
-
-```bash
-python3 steer.py chat --model gemma3:270m
-```
-
-Then update steering state from another terminal or tmux pane:
-
-```bash
-python3 steer.py update --feature-id 204 --strength 50 --layers 6 --label "Python code"
-```
-
-`chat` rereads `.steering/state.json` before each user turn, so changes apply
-on the next prompt.
-
-## tmux Workflow
-
-Useful sessions for parallel work:
-
-```bash
-tmux attach -t steering-ollama
+tmux attach -t steering-backend
 tmux attach -t steering-impl
 tmux attach -t steering-tests
 ```
 
-Suggested lane usage:
-
-| Session | Purpose |
-|---------|---------|
-| `steering-ollama` | Keep `python3 steer.py chat --model gemma3:270m` or Ollama checks running. |
-| `steering-impl` | Edit code and inspect state. |
-| `steering-tests` | Run tests and command smoke checks. |
-
 ## Commands
 
-### `update`
+### Update State
 
-Replace the current steering state with one steer:
-
-```bash
-python3 steer.py update --feature-id <N> --strength <F> --layers <L1,L2,...>
-```
-
-Add `--append` to stack a new steer with the current state:
+Replace active steering with one feature:
 
 ```bash
-python3 steer.py update --feature-id 7 --strength 10 --layers 8 --label "Legal text" --append
+python3 steer.py update --feature-id 204 --strength 30 --layers 6
 ```
 
-Options:
+Stack another feature:
 
-| Option | Description |
-|--------|-------------|
-| `--feature-id` | Integer feature identifier. |
-| `--strength` | Numeric steering strength. Positive values steer toward the label; negative values steer away. |
-| `--layers` | Comma-separated layer list, such as `6` or `6,8,10`. |
-| `--label` | Optional human-readable concept used by the Ollama prompt backend. |
-| `--append` | Append instead of replacing active steers. |
-| `--json` | Print the resulting state as JSON. |
+```bash
+python3 steer.py update --feature-id 1200 --strength 15 --layers 8 --append
+```
 
-### `show`
+Use an explicit SAE Lens id instead of layer shorthand:
 
-Print current steering state:
+```bash
+python3 steer.py update \
+  --feature-id 204 \
+  --strength 30 \
+  --sae-id blocks.6.hook_resid_pre
+```
+
+### Inspect State
 
 ```bash
 python3 steer.py show
-```
-
-Print raw JSON:
-
-```bash
 python3 steer.py show --json
 ```
 
-### `clear`
-
-Drop all active steers:
+### Clear State
 
 ```bash
 python3 steer.py clear
 ```
 
-### `models`
+### Look Up a Feature
 
-List local Ollama models:
-
-```bash
-python3 steer.py models
-```
-
-Use a custom Ollama endpoint:
+Use Neuronpedia as the source for feature descriptions:
 
 ```bash
-python3 steer.py models --base-url http://127.0.0.1:11434
+python3 steer.py feature --layer 6 --feature-id 204
 ```
 
-### `generate`
-
-Generate one response using the current steering state:
+Equivalent explicit Neuronpedia SAE id:
 
 ```bash
-python3 steer.py generate --model gemma3:270m "Your prompt here"
+python3 steer.py feature --model-id gpt2-small --sae-id 6-res-jb --feature-id 204
 ```
 
-Read the prompt from stdin:
+### Generate
+
+Generate through the local TransformerLens server:
 
 ```bash
-printf "Your prompt here" | python3 steer.py generate --model gemma3:270m
+python3 steer.py generate "The weather today is" --max-tokens 40
 ```
 
-Common options:
+Generation streams by default. Use `--no-stream` to wait for the full response.
+
+### Chat
 
 ```bash
-python3 steer.py generate \
-  --model gemma3:270m \
-  --max-tokens 120 \
-  --temperature 0.7 \
-  "Write a concise explanation of local LLM steering."
+python3 steer.py chat
 ```
 
-Use `--no-stream` to print only after the full response is complete.
-
-### `chat`
-
-Start an interactive loop:
-
-```bash
-python3 steer.py chat --model gemma3:270m
-```
-
-Chat commands:
+Inside chat:
 
 | Command | Effect |
 |---------|--------|
 | `/show` | Print active steering state. |
 | `/clear` | Clear active steering state. |
+| `/health` | Check the backend. |
 | `/exit` or `/quit` | Leave chat. |
+
+### Ollama Models
+
+This command is only for reference:
+
+```bash
+python3 steer.py ollama-models
+```
+
+Ollama models are not used for SAE feature steering by this backend.
+
+## Configuration
+
+Environment variables:
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `STEERING_DEVICE` | `auto` | Torch device. `auto` chooses `mps`, then `cuda`, then `cpu`. |
+| `STEERING_MODEL_NAME` | `gpt2-small` | TransformerLens model name. |
+| `STEERING_SAE_RELEASE` | `gpt2-small-res-jb` | SAE Lens release name. |
+| `STEERING_SAE_ID_TEMPLATE` | `blocks.{layer}.hook_resid_pre` | Maps `--layers` values to SAE Lens ids. |
+| `STEERING_STATE_PATH` | `.steering/state.json` | Shared steering state path. |
+| `STEERING_SERVER_URL` | `http://127.0.0.1:8000` | CLI target server. |
 
 ## State File
 
-By default, steering state is written to:
+By default, state is written to:
 
 ```bash
 .steering/state.json
 ```
 
-Use a different path by placing the global `--state-path` option before the
-subcommand:
-
-```bash
-python3 steer.py --state-path /tmp/steering-state.json update --feature-id 204 --strength 30 --layers 6
-python3 steer.py --state-path /tmp/steering-state.json show
-```
-
-You can also set:
-
-```bash
-export STEERING_STATE_PATH=/tmp/steering-state.json
-```
-
-State shape:
+Example:
 
 ```json
 {
@@ -251,56 +206,38 @@ State shape:
     {
       "feature_id": 204,
       "strength": 30.0,
-      "layers": [6],
-      "label": "Python code"
+      "layers": [6]
     }
   ]
 }
 ```
 
-## Ollama Configuration
-
-The CLI connects to `http://127.0.0.1:11434` by default.
-
-Override the endpoint per command:
+Use a custom path by putting `--state-path` before the subcommand:
 
 ```bash
-python3 steer.py generate --base-url http://127.0.0.1:11434 --model gemma3:270m "Hello"
-```
-
-Or use `OLLAMA_HOST`:
-
-```bash
-export OLLAMA_HOST=http://127.0.0.1:11434
+python3 steer.py --state-path /tmp/steering.json update --feature-id 204 --strength 30 --layers 6
 ```
 
 ## Testing
 
-Run the test suite:
+Run unit tests:
 
 ```bash
 python3 -m unittest discover -s tests
 ```
 
-Run basic command checks:
+Run CLI checks:
 
 ```bash
 python3 steer.py --help
-python3 steer.py models
+python3 steer.py feature --layer 6 --feature-id 204
 ```
 
-## Project Layout
+## Notes on Backend Choices
 
-| Path | Purpose |
-|------|---------|
-| `steer.py` | CLI entrypoint. |
-| `steering/state.py` | Steering state models, validation, loading, and saving. |
-| `steering/ollama_client.py` | Minimal Ollama HTTP client. |
-| `steering/prompt.py` | Converts steering state into an Ollama system prompt. |
-| `tests/` | Unit tests for state and prompt behavior. |
+TransformerLens is the best first backend for this repo because its hook points
+line up directly with the SAE Lens GPT-2 residual-stream SAEs.
 
-## Roadmap
-
-- Add a true SAE steering server for models that expose activation hooks.
-- Reuse the same `.steering/state.json` format from the Ollama backend.
-- Add end-to-end tests for a long-running generation or chat workflow.
+NNsight is also a strong route, especially for Hugging Face models and remote
+NDIF execution. It is a good candidate for a second backend once the
+TransformerLens path is stable.
