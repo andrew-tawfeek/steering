@@ -2,158 +2,196 @@
 
 A local CLI and server for live SAE feature steering.
 
-The intended runtime is **not Ollama**. Ollama is useful for ordinary local
-generation, but it does not expose hidden activations or residual-stream hooks,
-so it cannot perform the feature steering described by Neuronpedia SAE pages.
-
-This project uses:
-
-- **TransformerLens** for a hookable local transformer runtime.
-- **SAE Lens** for loading pretrained sparse autoencoders and decoder vectors.
-- **Neuronpedia** as the feature catalog and metadata source.
-
-## How It Works
-
-1. `server.py` loads a local TransformerLens model, defaulting to `gpt2-small`.
-2. The server loads SAE Lens SAEs on demand, defaulting to `gpt2-small-res-jb`.
-3. `steer.py update` writes active feature steers into `.steering/state.json`.
-4. During generation, the server rereads that state and adds:
+This repo does **real activation steering**, not prompt steering. The backend
+loads a TransformerLens model and SAE Lens sparse autoencoders, then mutates the
+residual stream during generation by adding:
 
 ```text
 strength * SAE.W_dec[feature_id]
 ```
 
-to the configured residual-stream hook point.
+Neuronpedia is used as the feature catalog.
 
-For the default GPT-2 setup, `--layers 6` maps to:
+## Current Default Stack
 
-```text
-blocks.6.hook_resid_pre
-```
+| Piece | Default |
+|-------|---------|
+| Model runtime | TransformerLens |
+| Model | `gpt2-small` |
+| SAE library | SAE Lens |
+| SAE release | `gpt2-small-res-jb` |
+| State file | `.steering/state.json` |
+| Server | `http://127.0.0.1:8000` |
 
-and the matching Neuronpedia page is:
+Layer shorthand maps to SAE Lens hook ids. For example:
 
-```text
-https://www.neuronpedia.org/gpt2-small/6-res-jb/<feature-id>
-```
+| CLI layer | SAE Lens id | Neuronpedia source |
+|-----------|-------------|--------------------|
+| `--layers 6` | `blocks.6.hook_resid_pre` | `gpt2-small/6-res-jb` |
+| `--layers 8` | `blocks.8.hook_resid_pre` | `gpt2-small/8-res-jb` |
+| `--layers 10` | `blocks.10.hook_resid_pre` | `gpt2-small/10-res-jb` |
 
-## Requirements
+## Setup
 
-- macOS
-- Python 3.11 or newer
-- Enough disk space for GPT-2 small and SAE downloads
-
-Install dependencies:
+Use Python 3.12 on this Mac:
 
 ```bash
-python3 -m venv .venv
+/opt/homebrew/bin/python3.12 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install -r requirements.txt
 ```
 
-On Apple Silicon, PyTorch should use MPS by default through the configured
-backend device. You can force CPU if needed:
+The current environment has been verified with:
 
 ```bash
-export STEERING_DEVICE=cpu
+python -m unittest discover -s tests
+python steer.py feature --layer 6 --feature-id 204
 ```
 
-## Run
+## Start The Backend
 
-Terminal A starts the hookable backend:
+Terminal A:
 
 ```bash
 source .venv/bin/activate
 uvicorn server:app --host 127.0.0.1 --port 8000
 ```
 
-The first launch downloads model and SAE weights.
+The first startup downloads GPT-2 small. The first steered generation for a
+layer downloads that layer's SAE weights.
 
-Terminal B controls steering:
+Check that the server is ready:
 
 ```bash
 source .venv/bin/activate
-python3 steer.py health
-python3 steer.py feature --layer 6 --feature-id 204
-python3 steer.py update --feature-id 204 --strength 30 --layers 6
-python3 steer.py generate "The weather today is" --max-tokens 40
-python3 steer.py clear
+python steer.py health
 ```
 
-Existing tmux lanes for this repo:
+Expected shape:
+
+```json
+{
+  "backend": "transformer-lens",
+  "device": "mps",
+  "model_name": "gpt2-small",
+  "sae_id_template": "blocks.{layer}.hook_resid_pre",
+  "sae_release": "gpt2-small-res-jb"
+}
+```
+
+## Smoke Test
+
+Terminal B:
 
 ```bash
-tmux attach -t steering-backend
-tmux attach -t steering-impl
-tmux attach -t steering-tests
+source .venv/bin/activate
+python steer.py clear
+python steer.py generate "The weather today is" --max-tokens 20 --temperature 0
+python steer.py update --feature-id 204 --strength 10 --layers 6
+python steer.py show
+python steer.py generate "The weather today is" --max-tokens 20 --temperature 0
+python steer.py clear
 ```
+
+What this does:
+
+1. Clears old state.
+2. Generates a baseline continuation.
+3. Adds feature `204` at layer `6`.
+4. Generates again with the residual-stream intervention active.
+5. Clears state when finished.
+
+## Neuronpedia Feature Lookup
+
+Feature ids are only meaningful for a specific model and SAE source. Use
+Neuronpedia lookup before steering:
+
+```bash
+python steer.py feature --layer 6 --feature-id 204
+```
+
+Equivalent explicit lookup:
+
+```bash
+python steer.py feature --model-id gpt2-small --sae-id 6-res-jb --feature-id 204
+```
+
+The output includes the Neuronpedia explanation, default steer strength, top
+logit effects, an activation snippet, and the feature URL.
 
 ## Commands
 
-### Update State
+### `update`
 
-Replace active steering with one feature:
+Replace active steering state:
 
 ```bash
-python3 steer.py update --feature-id 204 --strength 30 --layers 6
+python steer.py update --feature-id 204 --strength 10 --layers 6
 ```
 
-Stack another feature:
+Append another steer:
 
 ```bash
-python3 steer.py update --feature-id 1200 --strength 15 --layers 8 --append
+python steer.py update --feature-id 1200 --strength 15 --layers 8 --append
 ```
 
-Use an explicit SAE Lens id instead of layer shorthand:
+Use an explicit SAE Lens hook id:
 
 ```bash
-python3 steer.py update \
+python steer.py update \
   --feature-id 204 \
-  --strength 30 \
+  --strength 10 \
   --sae-id blocks.6.hook_resid_pre
 ```
 
-### Inspect State
+Options:
+
+| Option | Meaning |
+|--------|---------|
+| `--feature-id` | SAE feature index. |
+| `--strength` | Scalar multiplier for the SAE decoder vector. |
+| `--layers` | Comma-separated layer shorthand, such as `6` or `6,8,10`. |
+| `--sae-id` | Explicit SAE Lens id. Use this instead of `--layers` for non-default SAEs. |
+| `--append` | Stack this steer on top of existing state. |
+| `--label` | Optional local note; not used as a prompt. |
+| `--json` | Print resulting state as JSON. |
+
+### `show`
 
 ```bash
-python3 steer.py show
-python3 steer.py show --json
+python steer.py show
+python steer.py show --json
 ```
 
-### Clear State
+### `clear`
 
 ```bash
-python3 steer.py clear
+python steer.py clear
 ```
 
-### Look Up a Feature
-
-Use Neuronpedia as the source for feature descriptions:
+### `generate`
 
 ```bash
-python3 steer.py feature --layer 6 --feature-id 204
+python steer.py generate "The weather today is" --max-tokens 40
 ```
 
-Equivalent explicit Neuronpedia SAE id:
+Common deterministic test form:
 
 ```bash
-python3 steer.py feature --model-id gpt2-small --sae-id 6-res-jb --feature-id 204
+python steer.py generate "The weather today is" --max-tokens 20 --temperature 0
 ```
 
-### Generate
-
-Generate through the local TransformerLens server:
+Use a custom backend URL:
 
 ```bash
-python3 steer.py generate "The weather today is" --max-tokens 40
+python steer.py generate --server-url http://127.0.0.1:8000 "Hello"
 ```
 
-Generation streams by default. Use `--no-stream` to wait for the full response.
-
-### Chat
+### `chat`
 
 ```bash
-python3 steer.py chat
+python steer.py chat
 ```
 
 Inside chat:
@@ -162,18 +200,26 @@ Inside chat:
 |---------|--------|
 | `/show` | Print active steering state. |
 | `/clear` | Clear active steering state. |
-| `/health` | Check the backend. |
+| `/health` | Check backend status. |
 | `/exit` or `/quit` | Leave chat. |
 
-### Ollama Models
+## tmux Workflow
 
-This command is only for reference:
+Existing sessions:
 
 ```bash
-python3 steer.py ollama-models
+tmux attach -t steering-backend
+tmux attach -t steering-impl
+tmux attach -t steering-tests
 ```
 
-Ollama models are not used for SAE feature steering by this backend.
+Recommended usage:
+
+| Session | Purpose |
+|---------|---------|
+| `steering-backend` | Keep `uvicorn server:app --host 127.0.0.1 --port 8000` running. |
+| `steering-impl` | Edit code and inspect files. |
+| `steering-tests` | Run tests and CLI smoke checks. |
 
 ## Configuration
 
@@ -181,63 +227,65 @@ Environment variables:
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
-| `STEERING_DEVICE` | `auto` | Torch device. `auto` chooses `mps`, then `cuda`, then `cpu`. |
+| `STEERING_DEVICE` | `auto` | Chooses `mps`, then `cuda`, then `cpu`. |
 | `STEERING_MODEL_NAME` | `gpt2-small` | TransformerLens model name. |
-| `STEERING_SAE_RELEASE` | `gpt2-small-res-jb` | SAE Lens release name. |
+| `STEERING_SAE_RELEASE` | `gpt2-small-res-jb` | SAE Lens release. |
 | `STEERING_SAE_ID_TEMPLATE` | `blocks.{layer}.hook_resid_pre` | Maps `--layers` values to SAE Lens ids. |
 | `STEERING_STATE_PATH` | `.steering/state.json` | Shared steering state path. |
 | `STEERING_SERVER_URL` | `http://127.0.0.1:8000` | CLI target server. |
 
+TransformerLens currently warns that MPS may produce incorrect results with
+PyTorch 2.11.0. For correctness-first testing, start the backend on CPU:
+
+```bash
+source .venv/bin/activate
+STEERING_DEVICE=cpu uvicorn server:app --host 127.0.0.1 --port 8000
+```
+
 ## State File
 
-By default, state is written to:
+Default path:
 
 ```bash
 .steering/state.json
 ```
 
-Example:
+Example state:
 
 ```json
 {
   "version": 1,
-  "updated_at": "2026-04-30T18:14:35+00:00",
+  "updated_at": "2026-04-30T18:40:06+00:00",
   "items": [
     {
       "feature_id": 204,
-      "strength": 30.0,
+      "strength": 10.0,
       "layers": [6]
     }
   ]
 }
 ```
 
-Use a custom path by putting `--state-path` before the subcommand:
+Use a custom state path by putting `--state-path` before the command:
 
 ```bash
-python3 steer.py --state-path /tmp/steering.json update --feature-id 204 --strength 30 --layers 6
+python steer.py --state-path /tmp/steering.json update --feature-id 204 --strength 10 --layers 6
+python steer.py --state-path /tmp/steering.json show
 ```
 
-## Testing
-
-Run unit tests:
+## Tests
 
 ```bash
-python3 -m unittest discover -s tests
+source .venv/bin/activate
+python -m unittest discover -s tests
+python -m py_compile steer.py server.py steering/*.py tests/*.py
+python steer.py feature --layer 6 --feature-id 204
 ```
 
-Run CLI checks:
+## Backend Notes
 
-```bash
-python3 steer.py --help
-python3 steer.py feature --layer 6 --feature-id 204
-```
+TransformerLens is the first backend because its hook names line up directly
+with SAE Lens GPT-2 residual-stream SAEs.
 
-## Notes on Backend Choices
-
-TransformerLens is the best first backend for this repo because its hook points
-line up directly with the SAE Lens GPT-2 residual-stream SAEs.
-
-NNsight is also a strong route, especially for Hugging Face models and remote
-NDIF execution. It is a good candidate for a second backend once the
-TransformerLens path is stable.
+NNsight is a good next backend for Hugging Face models and NDIF-style remote
+execution, but it is not required for the current GPT-2/SAE Lens path.
