@@ -199,7 +199,7 @@ def decoder_weight_for_sae(sae: Any) -> Any:
 
 
 def make_additive_hook(delta: Any) -> Callable:
-    def hook(activation: Any, _hook: Any) -> Any:
+    def hook(activation: Any, hook: Any | None = None) -> Any:
         return activation + delta.to(device=activation.device, dtype=activation.dtype)
 
     return hook
