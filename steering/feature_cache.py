@@ -309,8 +309,7 @@ class NeuronpediaDatasetClient:
                 query["delimiter"] = delimiter
             if continuation is not None:
                 query["continuation-token"] = continuation
-            path = "/?" + parse.urlencode(query)
-            xml = self._read_text(path)
+            xml = self._read_text("/?" + parse.urlencode(query))
             root = ET.fromstring(xml)
             namespace = {"s3": "http://s3.amazonaws.com/doc/2006-03-01/"}
             keys.extend(node.text or "" for node in root.findall("s3:Contents/s3:Key", namespace))

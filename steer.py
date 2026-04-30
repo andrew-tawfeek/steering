@@ -121,19 +121,19 @@ def build_parser() -> argparse.ArgumentParser:
     cache_sources.add_argument("--contains", default=None, help="only show sources containing this text")
     cache_sources.set_defaults(func=cmd_feature_cache_sources)
 
-    cache_build = cache_subparsers.add_parser(
+    cache_download = cache_subparsers.add_parser(
         "download",
         aliases=["build"],
         help="download/cache feature labels from Neuronpedia exports",
     )
-    cache_build.add_argument("--model-id", required=True)
-    cache_build.add_argument("--source", "--sae-id", action="append", dest="sources", default=[])
-    cache_build.add_argument("--all-sources", action="store_true", help="cache every source for the model")
-    cache_build.add_argument("--source-contains", default=None, help="filter --all-sources by substring")
-    cache_build.add_argument("--limit-sources", type=int, default=None, help="limit number of sources to cache")
-    cache_build.add_argument("--max-files", type=int, default=None, help="development/testing: limit export files per source")
-    cache_build.add_argument("--cache-path", type=Path, default=None)
-    cache_build.set_defaults(func=cmd_feature_cache_download)
+    cache_download.add_argument("--model-id", required=True)
+    cache_download.add_argument("--source", "--sae-id", action="append", dest="sources", default=[])
+    cache_download.add_argument("--all-sources", action="store_true", help="cache every source for the model")
+    cache_download.add_argument("--source-contains", default=None, help="filter --all-sources by substring")
+    cache_download.add_argument("--limit-sources", type=int, default=None, help="limit number of sources to cache")
+    cache_download.add_argument("--max-files", type=int, default=None, help="development/testing: limit export files per source")
+    cache_download.add_argument("--cache-path", type=Path, default=None)
+    cache_download.set_defaults(func=cmd_feature_cache_download)
 
     cache_search = cache_subparsers.add_parser("search", help="search cached labels")
     cache_search.add_argument("query")
