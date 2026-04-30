@@ -46,6 +46,7 @@ The current environment has been verified with:
 ```bash
 python -m unittest discover -s tests
 python steer.py feature --layer 6 --feature-id 204
+python steer.py feature-cache sources --model-id gpt2-small --contains res-jb
 ```
 
 ## Start The Backend
@@ -118,6 +119,91 @@ python steer.py feature --model-id gpt2-small --sae-id 6-res-jb --feature-id 204
 
 The output includes the Neuronpedia explanation, default steer strength, top
 logit effects, an activation snippet, and the feature URL.
+
+## Feature Label Cache
+
+Neuronpedia's docs expose both the feature API and full public exports. This
+CLI uses the exports for bulk label caching so local search does not hammer the
+interactive API.
+
+Cache identity is:
+
+```text
+model_id/source_id/feature_id
+```
+
+For example, `gpt2-small/6-res-jb/204` and `gpt2-small/8-res-jb/204` are
+different features.
+
+Search works against the local SQLite cache only. Run `download` first, then
+use `search` or `show` without waiting on Neuronpedia. Search is
+case-insensitive, splits the query into words, and returns labels whose
+description contains every query word. It is keyword search over cached
+descriptions, not embedding or semantic search.
+
+List models and sources available in the public export:
+
+```bash
+python steer.py feature-cache models
+python steer.py feature-cache sources --model-id gpt2-small --contains res-jb
+```
+
+Download labels for one source:
+
+```bash
+python steer.py feature-cache download --model-id gpt2-small --source 6-res-jb
+```
+
+Download labels for every matching source. This can take a while and can create
+a large cache:
+
+```bash
+python steer.py feature-cache download \
+  --model-id gpt2-small \
+  --all-sources \
+  --source-contains res-jb
+```
+
+Search cached labels:
+
+```bash
+python steer.py feature-cache search "time phrases" \
+  --model-id gpt2-small \
+  --source 6-res-jb \
+  --limit 10
+```
+
+Leave off `--source` to search all cached sources for a model, or leave off
+both `--model-id` and `--source` to search the whole local cache:
+
+```bash
+python steer.py feature-cache search "calendar dates" --model-id gpt2-small
+python steer.py feature-cache search "induction heads" --limit 25
+```
+
+Show the cached labels for a specific feature id:
+
+```bash
+python steer.py feature-cache show \
+  --model-id gpt2-small \
+  --source 6-res-jb \
+  --feature-id 204
+```
+
+Check what is cached:
+
+```bash
+python steer.py feature-cache status
+```
+
+The default cache path is:
+
+```bash
+.steering/feature-cache.sqlite3
+```
+
+Use a custom cache path with `--cache-path`, or set
+`STEERING_FEATURE_CACHE_PATH`.
 
 ## Commands
 
@@ -202,6 +288,27 @@ Inside chat:
 | `/health` | Check backend status. |
 | `/exit` or `/quit` | Leave chat. |
 
+### `feature-cache`
+
+```bash
+python steer.py feature-cache models
+python steer.py feature-cache sources --model-id gpt2-small
+python steer.py feature-cache download --model-id gpt2-small --source 6-res-jb
+python steer.py feature-cache search "calendar dates" --model-id gpt2-small --source 6-res-jb
+python steer.py feature-cache show --model-id gpt2-small --source 6-res-jb --feature-id 204
+python steer.py feature-cache status
+```
+
+For development smoke tests, limit the export download:
+
+```bash
+python steer.py feature-cache download \
+  --model-id gpt2-small \
+  --source 6-res-jb \
+  --max-files 1 \
+  --cache-path /tmp/feature-cache.sqlite3
+```
+
 ## tmux Workflow
 
 Existing sessions:
@@ -231,6 +338,7 @@ Environment variables:
 | `STEERING_SAE_RELEASE` | `gpt2-small-res-jb` | SAE Lens release. |
 | `STEERING_SAE_ID_TEMPLATE` | `blocks.{layer}.hook_resid_pre` | Maps `--layers` values to SAE Lens ids. |
 | `STEERING_STATE_PATH` | `.steering/state.json` | Shared steering state path. |
+| `STEERING_FEATURE_CACHE_PATH` | `.steering/feature-cache.sqlite3` | SQLite cache for Neuronpedia labels. |
 | `STEERING_SERVER_URL` | `http://127.0.0.1:8000` | CLI target server. |
 
 TransformerLens currently warns that MPS may produce incorrect results with
@@ -279,6 +387,10 @@ source .venv/bin/activate
 python -m unittest discover -s tests
 python -m py_compile steer.py server.py steering/*.py tests/*.py
 python steer.py feature --layer 6 --feature-id 204
+tmpdir=$(mktemp -d)
+python steer.py feature-cache download --model-id gpt2-small --source 6-res-jb --max-files 1 --cache-path "$tmpdir/cache.sqlite3"
+python steer.py feature-cache search time --model-id gpt2-small --source 6-res-jb --cache-path "$tmpdir/cache.sqlite3" --limit 3
+rm -rf "$tmpdir"
 ```
 
 ## Backend Notes
