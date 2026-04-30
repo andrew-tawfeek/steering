@@ -2,9 +2,8 @@
 
 A local CLI and server for live SAE feature steering.
 
-This repo does **real activation steering**, not prompt steering. The backend
-loads a TransformerLens model and SAE Lens sparse autoencoders, then mutates the
-residual stream during generation by adding:
+The backend loads a TransformerLens model and SAE Lens sparse autoencoders,
+then mutates the residual stream during generation by adding:
 
 ```text
 strength * SAE.W_dec[feature_id]
@@ -154,7 +153,7 @@ Options:
 | `--layers` | Comma-separated layer shorthand, such as `6` or `6,8,10`. |
 | `--sae-id` | Explicit SAE Lens id. Use this instead of `--layers` for non-default SAEs. |
 | `--append` | Stack this steer on top of existing state. |
-| `--label` | Optional local note; not used as a prompt. |
+| `--label` | Optional local note stored with the state. |
 | `--json` | Print resulting state as JSON. |
 
 ### `show`

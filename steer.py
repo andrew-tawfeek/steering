@@ -13,7 +13,6 @@ from steering.neuronpedia_client import (
     NeuronpediaError,
     summarize_feature,
 )
-from steering.ollama_client import OllamaClient, OllamaError
 from steering.state import (
     SteerItem,
     SteeringError,
@@ -33,7 +32,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         return args.func(args)
-    except (SteeringError, LocalServerError, NeuronpediaError, OllamaError) as exc:
+    except (SteeringError, LocalServerError, NeuronpediaError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
@@ -97,13 +96,6 @@ def build_parser() -> argparse.ArgumentParser:
     feature.add_argument("--base-url", default=None)
     feature.add_argument("--json", action="store_true")
     feature.set_defaults(func=cmd_feature)
-
-    ollama_models = subparsers.add_parser(
-        "ollama-models",
-        help="list Ollama models; Ollama is not used for feature steering",
-    )
-    ollama_models.add_argument("--base-url", default=None)
-    ollama_models.set_defaults(func=cmd_ollama_models)
 
     return parser
 
@@ -222,21 +214,6 @@ def cmd_feature(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_ollama_models(args: argparse.Namespace) -> int:
-    client = OllamaClient.from_env(args.base_url)
-    data = client.tags()
-    models = data.get("models", [])
-    if not models:
-        print("no local Ollama models found")
-        return 0
-    print("Ollama models are listed for reference only; they are not steerable by this CLI.")
-    for model in models:
-        name = model.get("name", "<unknown>")
-        size = model.get("size", 0)
-        print(f"{name}\t{human_size(size)}")
-    return 0
-
-
 def format_state(state) -> str:
     if state.is_empty:
         return "no active steers"
@@ -256,15 +233,6 @@ def format_state(state) -> str:
 
 def resolved_state_path(args: argparse.Namespace) -> Path:
     return args.state_path or default_state_path()
-
-
-def human_size(size: int) -> str:
-    value = float(size)
-    for unit in ("B", "KB", "MB", "GB", "TB"):
-        if value < 1024 or unit == "TB":
-            return f"{value:.1f} {unit}"
-        value /= 1024
-    return f"{size} B"
 
 
 if __name__ == "__main__":
