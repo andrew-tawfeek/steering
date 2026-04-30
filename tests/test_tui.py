@@ -9,7 +9,7 @@ from textual.widgets import Button, DataTable, Input, Static
 
 from steering.feature_cache import FeatureCache, FeatureLabel
 from steering.state import SteerItem, load_state, update_state
-from steering.tui import SteeringTUI, neuronpedia_sae_id_from_form
+from steering.tui import SteeringTUI, completion_text_for_ui, neuronpedia_sae_id_from_form
 
 
 class FakeClient:
@@ -69,6 +69,15 @@ class SlowFakeClient(FakeClient):
         yield "hel"
         time.sleep(0.15)
         yield "lo"
+
+
+class ParagraphFakeClient(FakeClient):
+    def generate(self, **kwargs):
+        self.generations.append(kwargs)
+        yield "first paragraph"
+        yield "\n"
+        yield "\n"
+        yield "second paragraph"
 
 
 class SteeringTUITests(unittest.IsolatedAsyncioTestCase):
@@ -228,6 +237,23 @@ class SteeringTUITests(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(app._generating)
                 self.assertFalse(preview.display)
                 self.assertEqual(app._stream_text, "hello")
+
+    async def test_generation_stops_at_first_paragraph_for_ui(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            app = make_app(path)
+            app.client = ParagraphFakeClient()
+
+            async with app.run_test(size=(120, 40)) as pilot:
+                await pilot.pause(0.1)
+                app.query_one("#prompt", Input).value = "hello"
+
+                app.send_prompt()
+                await pilot.pause(0.2)
+
+                self.assertFalse(app._generating)
+                self.assertEqual(app._stream_text, "first paragraph")
+                self.assertIn("Stopped at first paragraph", str(app.query_one("#generation-status", Static).content))
 
     async def test_new_steer_clears_selection_and_form(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -457,6 +483,11 @@ class SteeringTUITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(neuronpedia_sae_id_from_form("", "blocks.6.hook_resid_pre"), "6-res-jb")
         self.assertEqual(neuronpedia_sae_id_from_form("", "7-res-jb"), "7-res-jb")
         self.assertEqual(neuronpedia_sae_id_from_form("", "6-res_scefr-ajt"), "6-res_scefr-ajt")
+
+    def test_completion_text_for_ui_trims_after_first_paragraph(self) -> None:
+        self.assertEqual(completion_text_for_ui("first\n\nsecond"), ("first", True))
+        self.assertEqual(completion_text_for_ui("first\r\n\r\nsecond"), ("first", True))
+        self.assertEqual(completion_text_for_ui("one line"), ("one line", False))
 
 
 def make_app(path: Path) -> SteeringTUI:

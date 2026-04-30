@@ -33,6 +33,7 @@ from steering.state import (
 
 DEFAULT_SERVER_URL = "http://127.0.0.1:8000"
 DEFAULT_TEMPERATURE = 0.0
+DEFAULT_UI_MAX_TOKENS = 32
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -87,14 +88,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     chat = subparsers.add_parser("chat", help="interactive raw-completion loop through the local TransformerLens server")
     chat.add_argument("--server-url", default=DEFAULT_SERVER_URL)
-    chat.add_argument("--max-tokens", type=int, default=80)
+    chat.add_argument("--max-tokens", type=int, default=DEFAULT_UI_MAX_TOKENS)
     chat.add_argument("--temperature", type=float, default=DEFAULT_TEMPERATURE)
     chat.add_argument("--seed", type=int, default=None)
     chat.set_defaults(func=cmd_chat)
 
     ui = subparsers.add_parser("ui", help="open the split-pane completion and steering interface")
     ui.add_argument("--server-url", default=DEFAULT_SERVER_URL)
-    ui.add_argument("--max-tokens", type=int, default=80)
+    ui.add_argument("--max-tokens", type=int, default=DEFAULT_UI_MAX_TOKENS)
     ui.add_argument("--temperature", type=float, default=DEFAULT_TEMPERATURE)
     ui.set_defaults(func=cmd_ui)
 

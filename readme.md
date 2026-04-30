@@ -95,6 +95,8 @@ running, waits for `/health`, then opens the interface.
 The left pane is a text-completion surface for the current backend model. The
 default backend is raw `gpt2-small`, not a chat-tuned assistant, so use prompts
 that look like text to continue rather than questions expecting a helpful reply.
+For demos, the interface defaults to deterministic sampling and stops displayed
+output at the first paragraph break to avoid GPT-2 repetition loops.
 The right pane shows active steers, feature lookup controls, and the local
 feature-label cache. Steering changes are written to `.steering/state.json`;
 the backend reads that state during generation.
@@ -382,7 +384,7 @@ python steer.py ui
 Common options:
 
 ```bash
-python steer.py ui --server-url http://127.0.0.1:8000 --max-tokens 80 --temperature 0
+python steer.py ui --server-url http://127.0.0.1:8000 --max-tokens 32 --temperature 0
 ```
 
 Use `--temperature 0` for deterministic demos with the raw GPT-2 backend.

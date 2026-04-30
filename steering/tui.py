@@ -40,6 +40,8 @@ STREAM_FLUSH_SECONDS = 0.08
 STREAM_FLUSH_CHARS = 32
 STREAM_PREVIEW_CHARS = 1800
 DEFAULT_TEMPERATURE = 0.0
+DEFAULT_UI_MAX_TOKENS = 32
+COMPLETION_STOP_SEQUENCES = ("\r\n\r\n", "\n\n")
 FORM_INPUT_IDS = frozenset({"feature-id", "strength", "layers", "sae-id", "label", "model-id"})
 GENERATION_INPUT_IDS = frozenset({"max-tokens", "temperature"})
 CACHE_INPUT_IDS = frozenset(
@@ -262,7 +264,7 @@ class SteeringTUI(App):
                     yield Label("Tokens", classes="inline-label")
                     yield Input(
                         str(self.max_tokens),
-                        placeholder="80",
+                        placeholder=str(DEFAULT_UI_MAX_TOKENS),
                         id="max-tokens",
                         name="Maximum new tokens",
                         tooltip="Maximum response tokens, 1 to 512.",
@@ -1014,29 +1016,43 @@ class SteeringTUI(App):
                 stream=True,
             )
             parts: list[str] = []
-            pending: list[str] = []
+            last_preview_text = ""
             last_flush = time.monotonic()
+            stopped_at_paragraph = False
             for chunk in chunks:
                 parts.append(chunk)
-                pending.append(chunk)
+                raw_text = "".join(parts)
+                preview_text, stopped = completion_text_for_ui(raw_text)
                 now = time.monotonic()
-                pending_text = "".join(pending)
                 if (
-                    len(parts) == 1
-                    or len(pending_text) >= STREAM_FLUSH_CHARS
+                    preview_text != last_preview_text
+                    and (
+                        not last_preview_text
+                        or len(preview_text) - len(last_preview_text) >= STREAM_FLUSH_CHARS
+                        or stopped
+                    )
                     or now - last_flush >= STREAM_FLUSH_SECONDS
                 ):
-                    self._call_from_worker(self._append_stream_chunk, pending_text)
-                    pending.clear()
+                    self._call_from_worker(self._set_stream_text, preview_text)
+                    last_preview_text = preview_text
                     last_flush = now
-            if pending:
-                self._call_from_worker(self._append_stream_chunk, "".join(pending))
+                if stopped:
+                    stopped_at_paragraph = True
+                    if preview_text != last_preview_text:
+                        self._call_from_worker(self._set_stream_text, preview_text)
+                        last_preview_text = preview_text
+                    break
 
-            text = "".join(parts).strip()
+            text, stopped = completion_text_for_ui("".join(parts))
+            stopped_at_paragraph = stopped_at_paragraph or stopped
+            if text != last_preview_text:
+                self._call_from_worker(self._set_stream_text, text)
+            text = text.strip()
             if not text:
                 text = "[dim](empty response)[/dim]"
             self._call_from_worker(self.log_chat, f"[bold green]Completion:[/bold green] {text}")
-            self._call_from_worker(self._set_generation_status, "Raw completion ready.", "success")
+            status = "Stopped at first paragraph." if stopped_at_paragraph else "Raw completion ready."
+            self._call_from_worker(self._set_generation_status, status, "success")
         except LocalServerError as exc:
             self._call_from_worker(self.log_chat, f"[bold red]Generation failed:[/bold red] {exc}")
             self._call_from_worker(self._set_generation_status, str(exc), "error")
@@ -1593,7 +1609,10 @@ class SteeringTUI(App):
         preview.update(Text(f"{model_name} is starting..."))
 
     def _append_stream_chunk(self, chunk: str) -> None:
-        self._stream_text += chunk
+        self._set_stream_text(self._stream_text + chunk)
+
+    def _set_stream_text(self, text: str) -> None:
+        self._stream_text = text
         visible_text = self._stream_text.strip() or self._stream_text
         if len(visible_text) > STREAM_PREVIEW_CHARS:
             visible_text = "..." + visible_text[-STREAM_PREVIEW_CHARS:]
@@ -1827,10 +1846,17 @@ def valid_temperature(raw: str) -> bool:
     return value >= 0
 
 
+def completion_text_for_ui(text: str) -> tuple[str, bool]:
+    stop_indices = [index for sequence in COMPLETION_STOP_SEQUENCES if (index := text.find(sequence)) >= 0]
+    if not stop_indices:
+        return text, False
+    return text[: min(stop_indices)].rstrip(), True
+
+
 def run_tui(
     *,
     server_url: str = "http://127.0.0.1:8000",
-    max_tokens: int = 80,
+    max_tokens: int = DEFAULT_UI_MAX_TOKENS,
     temperature: float = DEFAULT_TEMPERATURE,
     state_path: Path | None = None,
 ) -> None:
