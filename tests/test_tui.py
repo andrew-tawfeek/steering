@@ -197,6 +197,63 @@ class SteeringTUITests(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(app._generating)
                 self.assertTrue(app.query_one("#max-tokens", Input).has_class("invalid"))
 
+    async def test_continue_button_click_sends_prompt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            app = make_app(path)
+            async with app.run_test(size=(140, 48)) as pilot:
+                await pilot.pause(0.1)
+                app.query_one("#prompt", Input).value = "hello"
+
+                await pilot.click("#send")
+                await pilot.pause(0.2)
+
+                self.assertEqual(len(app.client.generations), 1)
+                self.assertEqual(app.client.generations[0]["prompt"], "hello")
+
+    async def test_continue_button_click_with_blank_prompt_shows_status(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            app = make_app(path)
+            async with app.run_test(size=(140, 48)) as pilot:
+                await pilot.pause(0.1)
+
+                await pilot.click("#send")
+                await pilot.pause(0.1)
+
+                self.assertEqual(len(app.client.generations), 0)
+                self.assertIn("Enter text", str(app.query_one("#generation-status", Static).content))
+
+    async def test_replace_button_click_saves_valid_form(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            app = make_app(path)
+            async with app.run_test(size=(140, 48)) as pilot:
+                await pilot.pause(0.1)
+                app.query_one("#feature-id", Input).value = "204"
+                app.query_one("#strength", Input).value = "10"
+                app.query_one("#layers", Input).value = "6"
+
+                await pilot.click("#replace")
+                await pilot.pause(0.2)
+
+            state = load_state(path)
+            self.assertEqual(len(state.items), 1)
+            self.assertEqual(state.items[0].feature_id, 204)
+
+    async def test_replace_button_click_with_placeholder_only_shows_required_status(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            app = make_app(path)
+            async with app.run_test(size=(140, 48)) as pilot:
+                await pilot.pause(0.1)
+
+                await pilot.click("#replace")
+                await pilot.pause(0.1)
+
+                self.assertTrue(app.query_one("#feature-id", Input).has_class("invalid"))
+                self.assertIn("feature id is required", str(app.query_one("#form-status", Static).content))
+
     async def test_negative_feature_id_marks_feature_field_invalid(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "state.json"
@@ -452,6 +509,43 @@ class SteeringTUITests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(app.query_one("#model-id", Input).value, "gpt2-small")
                 self.assertEqual(app.query_one("#label", Input).value, "time-related phrases and expressions")
                 self.assertEqual(app.query_one("#strength", Input).value, "10")
+
+    async def test_feature_cache_download_infers_source_from_layers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            app = make_app(path)
+            fake_dataset = FakeDatasetClient()
+            app.dataset_client = fake_dataset
+
+            async with app.run_test(size=(140, 48)) as pilot:
+                await pilot.pause(0.1)
+                app.query_one("#cache-model-id", Input).value = "gpt2-small"
+                app.query_one("#cache-source", Input).value = ""
+                app.query_one("#layers", Input).value = "8"
+
+                app.download_cache_source()
+                await pilot.pause(0.2)
+
+                self.assertEqual(fake_dataset.downloads, [("gpt2-small", "8-res-jb")])
+                self.assertEqual(app.query_one("#cache-source", Input).value, "8-res-jb")
+
+    async def test_feature_cache_download_defaults_source_when_blank(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            app = make_app(path)
+            fake_dataset = FakeDatasetClient()
+            app.dataset_client = fake_dataset
+
+            async with app.run_test(size=(140, 48)) as pilot:
+                await pilot.pause(0.1)
+                app.query_one("#cache-model-id", Input).value = "gpt2-small"
+                app.query_one("#cache-source", Input).value = ""
+
+                app.download_cache_source()
+                await pilot.pause(0.2)
+
+                self.assertEqual(fake_dataset.downloads, [("gpt2-small", "6-res-jb")])
+                self.assertEqual(app.query_one("#cache-source", Input).value, "6-res-jb")
 
     async def test_feature_cache_inspects_feature_id(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

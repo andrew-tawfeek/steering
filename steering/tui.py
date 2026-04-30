@@ -299,7 +299,7 @@ class SteeringTUI(App):
                 with Horizontal(classes="field-row"):
                     yield Label("Feature", classes="field-label")
                     yield Input(
-                        placeholder="204",
+                        placeholder="required feature id",
                         id="feature-id",
                         name="Feature id",
                         tooltip="SAE feature index.",
@@ -307,7 +307,7 @@ class SteeringTUI(App):
                 with Horizontal(classes="field-row"):
                     yield Label("Strength", classes="field-label")
                     yield Input(
-                        placeholder="10",
+                        placeholder="required strength",
                         id="strength",
                         name="Strength",
                         tooltip="Scalar multiplier for the SAE decoder vector.",
@@ -315,7 +315,7 @@ class SteeringTUI(App):
                 with Horizontal(classes="field-row"):
                     yield Label("Layers", classes="field-label")
                     yield Input(
-                        placeholder="6 or 6,8,10",
+                        placeholder="required layer, e.g. 6",
                         id="layers",
                         name="Layers",
                         tooltip="Comma-separated GPT-2 layer shorthand.",
@@ -392,10 +392,10 @@ class SteeringTUI(App):
                 with Horizontal(classes="field-row"):
                     yield Label("Source", classes="field-label")
                     yield Input(
-                        placeholder="6-res-jb",
+                        placeholder="blank uses Layers, default 6-res-jb",
                         id="cache-source",
                         name="Cache source",
-                        tooltip="Neuronpedia source id to cache or search.",
+                        tooltip="Neuronpedia source id. Blank uses the steer form layers; with no layer, 6-res-jb.",
                     )
                 with Horizontal(id="feature-cache-actions"):
                     yield Button("Models", id="list-models", tooltip="List available Neuronpedia export models.")
@@ -689,6 +689,8 @@ class SteeringTUI(App):
         prompt_input = self.query_one("#prompt", Input)
         prompt = prompt_input.value.strip()
         if not prompt:
+            self._set_generation_status("Enter text to continue.", "error")
+            prompt_input.focus()
             return
 
         settings = self._read_generation_settings()
@@ -1184,10 +1186,24 @@ class SteeringTUI(App):
         if source_id:
             return source_id
         if required:
-            source_input.set_class(True, "invalid")
-            source_input.focus()
-            raise SteeringError("Cache source is required.")
+            try:
+                source_id = self._infer_cache_source()
+            except SteeringError:
+                source_input.set_class(True, "invalid")
+                source_input.focus()
+                raise
+            source_input.value = source_id
+            self._set_cache_status(f"Using inferred source {source_id}.", "success")
+            return source_id
         return None
+
+    def _infer_cache_source(self) -> str:
+        layers_input = self.query_one("#layers", Input)
+        sae_input = self.query_one("#sae-id", Input)
+        try:
+            return neuronpedia_sae_id_from_form(layers_input.value, sae_input.value)
+        except SteeringError as exc:
+            raise SteeringError("Cache source is required, or provide a valid layer/SAE hook to infer it.") from exc
 
     def _read_cached_feature_target(self) -> tuple[str, str, int]:
         selected = self._selected_cache_label()
@@ -1357,14 +1373,14 @@ class SteeringTUI(App):
             max_tokens = int(tokens_input.value.strip())
             if not 1 <= max_tokens <= 512:
                 raise SteeringError("tokens must be between 1 and 512")
-        except ValueError:
-            tokens_input.set_class(True, "invalid")
-            self._set_generation_status("Tokens must be a whole number.", "error")
-            tokens_input.focus()
-            return None
         except SteeringError as exc:
             tokens_input.set_class(True, "invalid")
             self._set_generation_status(str(exc), "error")
+            tokens_input.focus()
+            return None
+        except ValueError:
+            tokens_input.set_class(True, "invalid")
+            self._set_generation_status("Tokens must be a whole number.", "error")
             tokens_input.focus()
             return None
 
@@ -1372,14 +1388,14 @@ class SteeringTUI(App):
             temperature = float(temperature_input.value.strip())
             if temperature < 0:
                 raise SteeringError("temperature must be >= 0")
-        except ValueError:
-            temperature_input.set_class(True, "invalid")
-            self._set_generation_status("Temperature must be a number.", "error")
-            temperature_input.focus()
-            return None
         except SteeringError as exc:
             temperature_input.set_class(True, "invalid")
             self._set_generation_status(str(exc), "error")
+            temperature_input.focus()
+            return None
+        except ValueError:
+            temperature_input.set_class(True, "invalid")
+            self._set_generation_status("Temperature must be a number.", "error")
             temperature_input.focus()
             return None
 
@@ -1432,28 +1448,28 @@ class SteeringTUI(App):
             feature_id = int(feature_raw)
             if feature_id < 0:
                 raise SteeringError("feature id must be >= 0")
-        except ValueError as exc:
-            feature_input.set_class(True, "invalid")
-            feature_input.focus()
-            raise SteeringError("feature id must be a whole number") from exc
         except SteeringError:
             feature_input.set_class(True, "invalid")
             feature_input.focus()
             raise
+        except ValueError as exc:
+            feature_input.set_class(True, "invalid")
+            feature_input.focus()
+            raise SteeringError("feature id must be a whole number") from exc
 
         try:
             strength_raw = strength_input.value.strip()
             if not strength_raw:
                 raise SteeringError("strength is required")
             strength = float(strength_raw)
-        except ValueError as exc:
-            strength_input.set_class(True, "invalid")
-            strength_input.focus()
-            raise SteeringError("strength must be a number") from exc
         except SteeringError:
             strength_input.set_class(True, "invalid")
             strength_input.focus()
             raise
+        except ValueError as exc:
+            strength_input.set_class(True, "invalid")
+            strength_input.focus()
+            raise SteeringError("strength must be a number") from exc
 
         layers_raw = layers_input.value.strip()
         sae_id = sae_input.value.strip() or None
