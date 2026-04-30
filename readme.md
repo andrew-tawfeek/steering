@@ -217,6 +217,12 @@ model_id/source_id/feature_id
 For example, `gpt2-small/6-res-jb/204` and `gpt2-small/8-res-jb/204` are
 different features.
 
+In the UI, `Source` means this Neuronpedia source id. For the default GPT-2
+residual-stream SAEs it is usually layer shorthand plus `res-jb`: layer `6`
+uses `6-res-jb`, layer `8` uses `8-res-jb`, and so on. If the UI Source field
+is blank, Download and Inspect infer it from the steer form's `Layers` or
+`SAE Hook`; if those are blank too, the demo default is `6-res-jb`.
+
 Search works against the local SQLite cache only. Run `download` first, then
 use `search` or `show` without waiting on Neuronpedia. Search is
 case-insensitive, splits the query into words, and returns labels whose
