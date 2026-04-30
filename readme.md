@@ -82,7 +82,7 @@ Expected shape:
 
 ## Launch The Terminal Interface
 
-The `CLI-interface` branch adds a split-pane terminal UI:
+The primary demo path is the split-pane terminal UI:
 
 ```bash
 ./start.sh
@@ -93,8 +93,70 @@ The `CLI-interface` branch adds a split-pane terminal UI:
 running, waits for `/health`, then opens the interface.
 
 The left pane is for chat with the current backend model. The right pane shows
-active steers and lets you replace, append, clear, refresh, and look up
-features while the backend is running.
+active steers, feature lookup controls, and the local feature-label cache.
+Steering changes are written to `.steering/state.json`; the backend reads that
+state during generation.
+
+Useful keys:
+
+| Key | Action |
+|-----|--------|
+| `F2` | Focus the chat prompt. |
+| `F3` | Focus active steers. |
+| `F6` | Send the current prompt. |
+| `F8` | Clear all active steers after confirmation. |
+| `F10` | List cache sources for the selected model. |
+| `F11` | Search cached labels. |
+| `F12` | Apply the selected cached feature to the steer form. |
+| `Ctrl+C` | Quit the interface. |
+
+## CLI Interface Demo
+
+Start from the repo root:
+
+```bash
+cd /Users/atawfeek/GitHub/steering
+git switch main
+./start.sh
+```
+
+The first run may download GPT-2 small and the first steered generation may
+download SAE Lens weights.
+
+Inside the interface:
+
+1. In the left chat prompt, ask:
+
+   ```text
+   Write one short sentence about today's weather.
+   ```
+
+2. In the right pane, set a manual steer:
+
+   ```text
+   Feature: 204
+   Strength: 10
+   Layers: 6
+   ```
+
+   Press `Set Only`.
+
+3. Send the same weather prompt again from the left pane and compare the
+   continuation with the baseline.
+
+4. Try the cache workflow:
+
+   ```text
+   Model: gpt2-small
+   Source: 6-res-jb
+   Search: time phrases
+   ```
+
+   Press `Download` once if that source is not cached yet, press `Search`,
+   select a result, then press `Apply` to copy its model/source/feature label
+   into the steer form.
+
+5. Press `Clear All` before ending the demo so no steer is left active.
 
 ## Smoke Test
 
@@ -341,12 +403,10 @@ python steer.py feature-cache download \
 
 ## tmux Workflow
 
-Existing sessions:
+Optional tmux sessions:
 
 ```bash
 tmux attach -t steering-backend
-tmux attach -t steering-impl
-tmux attach -t steering-tests
 ```
 
 Recommended usage:
@@ -354,9 +414,9 @@ Recommended usage:
 | Session | Purpose |
 |---------|---------|
 | `steering-backend` | Keep `uvicorn server:app --host 127.0.0.1 --port 8000` running. |
-| `steering-impl` | Edit code and inspect files. |
-| `steering-tests` | Run tests and CLI smoke checks. |
-| `cli-interface-agent` | Headless Codex loop for ongoing TUI/accessibility work. |
+
+`./start.sh` starts the backend automatically when it is not already running,
+so tmux is optional for normal demos.
 
 ## Configuration
 
