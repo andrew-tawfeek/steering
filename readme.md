@@ -73,7 +73,7 @@ Expected shape:
 ```json
 {
   "backend": "transformer-lens",
-  "device": "mps",
+  "device": "cpu",
   "model_name": "gpt2-small",
   "sae_id_template": "blocks.{layer}.hook_resid_pre",
   "sae_release": "gpt2-small-res-jb"
@@ -439,7 +439,7 @@ Environment variables:
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
-| `STEERING_DEVICE` | `auto` | Chooses `mps`, then `cuda`, then `cpu`. |
+| `STEERING_DEVICE` | `cpu` | Stable default for local Mac demos. Set `auto`, `mps`, or `cuda` explicitly to opt into acceleration. |
 | `STEERING_MODEL_NAME` | `gpt2-small` | TransformerLens model name. |
 | `STEERING_SAE_RELEASE` | `gpt2-small-res-jb` | SAE Lens release. |
 | `STEERING_SAE_ID_TEMPLATE` | `blocks.{layer}.hook_resid_pre` | Maps `--layers` values to SAE Lens ids. |
@@ -448,11 +448,20 @@ Environment variables:
 | `STEERING_SERVER_URL` | `http://127.0.0.1:8000` | CLI target server. |
 
 TransformerLens currently warns that MPS may produce incorrect results with
-PyTorch 2.11.0. For correctness-first testing, start the backend on CPU:
+PyTorch 2.11.0, and in this stack it can also leave a generation request stuck
+before the first streamed token. CPU is therefore the default. To start the
+backend explicitly on CPU:
 
 ```bash
 source .venv/bin/activate
 STEERING_DEVICE=cpu uvicorn server:app --host 127.0.0.1 --port 8000
+```
+
+To experiment with MPS anyway:
+
+```bash
+source .venv/bin/activate
+STEERING_DEVICE=mps uvicorn server:app --host 127.0.0.1 --port 8000
 ```
 
 ## State File

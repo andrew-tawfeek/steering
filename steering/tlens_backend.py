@@ -13,7 +13,7 @@ from .state import SteerItem, SteeringError, SteeringState, load_state
 DEFAULT_MODEL_NAME = "gpt2-small"
 DEFAULT_SAE_RELEASE = "gpt2-small-res-jb"
 DEFAULT_SAE_ID_TEMPLATE = "blocks.{layer}.hook_resid_pre"
-DEFAULT_DEVICE = "auto"
+DEFAULT_DEVICE = "cpu"
 
 
 @dataclass(frozen=True)
