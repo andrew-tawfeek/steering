@@ -46,6 +46,7 @@ The current environment has been verified with:
 ```bash
 python -m unittest discover -s tests
 python steer.py feature --layer 6 --feature-id 204
+python steer.py feature-cache sources --model-id gpt2-small --contains res-jb
 ```
 
 ## Start The Backend
@@ -78,6 +79,84 @@ Expected shape:
   "sae_release": "gpt2-small-res-jb"
 }
 ```
+
+## Launch The Terminal Interface
+
+The primary demo path is the split-pane terminal UI:
+
+```bash
+./start.sh
+```
+
+`start.sh` creates/uses `.venv`, installs missing dependencies from
+`requirements.txt`, starts the TransformerLens backend if it is not already
+running, waits for `/health`, then opens the interface.
+
+The left pane is for chat with the current backend model. The right pane shows
+active steers, feature lookup controls, and the local feature-label cache.
+Steering changes are written to `.steering/state.json`; the backend reads that
+state during generation.
+
+Useful keys:
+
+| Key | Action |
+|-----|--------|
+| `F2` | Focus the chat prompt. |
+| `F3` | Focus active steers. |
+| `F6` | Send the current prompt. |
+| `F8` | Clear all active steers after confirmation. |
+| `F10` | List cache sources for the selected model. |
+| `F11` | Search cached labels. |
+| `F12` | Apply the selected cached feature to the steer form. |
+| `Ctrl+C` | Quit the interface. |
+
+## CLI Interface Demo
+
+Start from the repo root:
+
+```bash
+cd /Users/atawfeek/GitHub/steering
+git switch main
+./start.sh
+```
+
+The first run may download GPT-2 small and the first steered generation may
+download SAE Lens weights.
+
+Inside the interface:
+
+1. In the left chat prompt, ask:
+
+   ```text
+   Write one short sentence about today's weather.
+   ```
+
+2. In the right pane, set a manual steer:
+
+   ```text
+   Feature: 204
+   Strength: 10
+   Layers: 6
+   ```
+
+   Press `Set Only`.
+
+3. Send the same weather prompt again from the left pane and compare the
+   continuation with the baseline.
+
+4. Try the cache workflow:
+
+   ```text
+   Model: gpt2-small
+   Source: 6-res-jb
+   Search: time phrases
+   ```
+
+   Press `Download` once if that source is not cached yet, press `Search`,
+   select a result, then press `Apply` to copy its model/source/feature label
+   into the steer form.
+
+5. Press `Clear All` before ending the demo so no steer is left active.
 
 ## Smoke Test
 
@@ -118,6 +197,91 @@ python steer.py feature --model-id gpt2-small --sae-id 6-res-jb --feature-id 204
 
 The output includes the Neuronpedia explanation, default steer strength, top
 logit effects, an activation snippet, and the feature URL.
+
+## Feature Label Cache
+
+Neuronpedia's docs expose both the feature API and full public exports. This
+CLI uses the exports for bulk label caching so local search does not hammer the
+interactive API.
+
+Cache identity is:
+
+```text
+model_id/source_id/feature_id
+```
+
+For example, `gpt2-small/6-res-jb/204` and `gpt2-small/8-res-jb/204` are
+different features.
+
+Search works against the local SQLite cache only. Run `download` first, then
+use `search` or `show` without waiting on Neuronpedia. Search is
+case-insensitive, splits the query into words, and returns labels whose
+description contains every query word. It is keyword search over cached
+descriptions, not embedding or semantic search.
+
+List models and sources available in the public export:
+
+```bash
+python steer.py feature-cache models
+python steer.py feature-cache sources --model-id gpt2-small --contains res-jb
+```
+
+Download labels for one source:
+
+```bash
+python steer.py feature-cache download --model-id gpt2-small --source 6-res-jb
+```
+
+Download labels for every matching source. This can take a while and can create
+a large cache:
+
+```bash
+python steer.py feature-cache download \
+  --model-id gpt2-small \
+  --all-sources \
+  --source-contains res-jb
+```
+
+Search cached labels:
+
+```bash
+python steer.py feature-cache search "time phrases" \
+  --model-id gpt2-small \
+  --source 6-res-jb \
+  --limit 10
+```
+
+Leave off `--source` to search all cached sources for a model, or leave off
+both `--model-id` and `--source` to search the whole local cache:
+
+```bash
+python steer.py feature-cache search "calendar dates" --model-id gpt2-small
+python steer.py feature-cache search "induction heads" --limit 25
+```
+
+Show the cached labels for a specific feature id:
+
+```bash
+python steer.py feature-cache show \
+  --model-id gpt2-small \
+  --source 6-res-jb \
+  --feature-id 204
+```
+
+Check what is cached:
+
+```bash
+python steer.py feature-cache status
+```
+
+The default cache path is:
+
+```bash
+.steering/feature-cache.sqlite3
+```
+
+Use a custom cache path with `--cache-path`, or set
+`STEERING_FEATURE_CACHE_PATH`.
 
 ## Commands
 
@@ -202,14 +366,47 @@ Inside chat:
 | `/health` | Check backend status. |
 | `/exit` or `/quit` | Leave chat. |
 
+### `ui`
+
+Open the split-pane TUI directly if the backend is already running:
+
+```bash
+python steer.py ui
+```
+
+Common options:
+
+```bash
+python steer.py ui --server-url http://127.0.0.1:8000 --max-tokens 80 --temperature 0.8
+```
+
+### `feature-cache`
+
+```bash
+python steer.py feature-cache models
+python steer.py feature-cache sources --model-id gpt2-small
+python steer.py feature-cache download --model-id gpt2-small --source 6-res-jb
+python steer.py feature-cache search "calendar dates" --model-id gpt2-small --source 6-res-jb
+python steer.py feature-cache show --model-id gpt2-small --source 6-res-jb --feature-id 204
+python steer.py feature-cache status
+```
+
+For development smoke tests, limit the export download:
+
+```bash
+python steer.py feature-cache download \
+  --model-id gpt2-small \
+  --source 6-res-jb \
+  --max-files 1 \
+  --cache-path /tmp/feature-cache.sqlite3
+```
+
 ## tmux Workflow
 
-Existing sessions:
+Optional tmux sessions:
 
 ```bash
 tmux attach -t steering-backend
-tmux attach -t steering-impl
-tmux attach -t steering-tests
 ```
 
 Recommended usage:
@@ -217,8 +414,9 @@ Recommended usage:
 | Session | Purpose |
 |---------|---------|
 | `steering-backend` | Keep `uvicorn server:app --host 127.0.0.1 --port 8000` running. |
-| `steering-impl` | Edit code and inspect files. |
-| `steering-tests` | Run tests and CLI smoke checks. |
+
+`./start.sh` starts the backend automatically when it is not already running,
+so tmux is optional for normal demos.
 
 ## Configuration
 
@@ -231,6 +429,7 @@ Environment variables:
 | `STEERING_SAE_RELEASE` | `gpt2-small-res-jb` | SAE Lens release. |
 | `STEERING_SAE_ID_TEMPLATE` | `blocks.{layer}.hook_resid_pre` | Maps `--layers` values to SAE Lens ids. |
 | `STEERING_STATE_PATH` | `.steering/state.json` | Shared steering state path. |
+| `STEERING_FEATURE_CACHE_PATH` | `.steering/feature-cache.sqlite3` | SQLite cache for Neuronpedia labels. |
 | `STEERING_SERVER_URL` | `http://127.0.0.1:8000` | CLI target server. |
 
 TransformerLens currently warns that MPS may produce incorrect results with
@@ -279,6 +478,28 @@ source .venv/bin/activate
 python -m unittest discover -s tests
 python -m py_compile steer.py server.py steering/*.py tests/*.py
 python steer.py feature --layer 6 --feature-id 204
+tmpdir=$(mktemp -d)
+python steer.py feature-cache download --model-id gpt2-small --source 6-res-jb --max-files 1 --cache-path "$tmpdir/cache.sqlite3"
+python steer.py feature-cache search time --model-id gpt2-small --source 6-res-jb --cache-path "$tmpdir/cache.sqlite3" --limit 3
+rm -rf "$tmpdir"
+```
+
+TUI smoke check:
+
+```bash
+python - <<'PY'
+import asyncio
+from steering.tui import SteeringTUI
+
+async def main():
+    app = SteeringTUI(server_url="http://127.0.0.1:8000", max_tokens=1, temperature=0, state_path=None)
+    async with app.run_test() as pilot:
+        await pilot.pause(0.1)
+        assert app.query_one("#prompt")
+        assert app.query_one("#steer-table")
+
+asyncio.run(main())
+PY
 ```
 
 ## Backend Notes

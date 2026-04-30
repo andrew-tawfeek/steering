@@ -6,6 +6,13 @@ import json
 from pathlib import Path
 import sys
 
+from steering.feature_cache import (
+    FeatureCache,
+    FeatureCacheError,
+    NeuronpediaDatasetClient,
+    build_source_cache,
+    default_feature_cache_path,
+)
 from steering.local_client import LocalServerClient, LocalServerError
 from steering.neuronpedia_client import (
     DEFAULT_STEERING_MODEL,
@@ -32,7 +39,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         return args.func(args)
-    except (SteeringError, LocalServerError, NeuronpediaError) as exc:
+    except (SteeringError, LocalServerError, NeuronpediaError, FeatureCacheError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
@@ -84,6 +91,12 @@ def build_parser() -> argparse.ArgumentParser:
     chat.add_argument("--seed", type=int, default=None)
     chat.set_defaults(func=cmd_chat)
 
+    ui = subparsers.add_parser("ui", help="open the split-pane terminal interface")
+    ui.add_argument("--server-url", default=DEFAULT_SERVER_URL)
+    ui.add_argument("--max-tokens", type=int, default=80)
+    ui.add_argument("--temperature", type=float, default=0.8)
+    ui.set_defaults(func=cmd_ui)
+
     health = subparsers.add_parser("health", help="check the local TransformerLens server")
     health.add_argument("--server-url", default=DEFAULT_SERVER_URL)
     health.set_defaults(func=cmd_health)
@@ -96,6 +109,50 @@ def build_parser() -> argparse.ArgumentParser:
     feature.add_argument("--base-url", default=None)
     feature.add_argument("--json", action="store_true")
     feature.set_defaults(func=cmd_feature)
+
+    feature_cache = subparsers.add_parser("feature-cache", help="download and search cached Neuronpedia labels")
+    cache_subparsers = feature_cache.add_subparsers(dest="feature_cache_command", required=True)
+
+    cache_models = cache_subparsers.add_parser("models", help="list models available in the Neuronpedia exports")
+    cache_models.set_defaults(func=cmd_feature_cache_models)
+
+    cache_sources = cache_subparsers.add_parser("sources", help="list export sources for a model")
+    cache_sources.add_argument("--model-id", required=True)
+    cache_sources.add_argument("--contains", default=None, help="only show sources containing this text")
+    cache_sources.set_defaults(func=cmd_feature_cache_sources)
+
+    cache_download = cache_subparsers.add_parser(
+        "download",
+        aliases=["build"],
+        help="download/cache feature labels from Neuronpedia exports",
+    )
+    cache_download.add_argument("--model-id", required=True)
+    cache_download.add_argument("--source", "--sae-id", action="append", dest="sources", default=[])
+    cache_download.add_argument("--all-sources", action="store_true", help="cache every source for the model")
+    cache_download.add_argument("--source-contains", default=None, help="filter --all-sources by substring")
+    cache_download.add_argument("--limit-sources", type=int, default=None, help="limit number of sources to cache")
+    cache_download.add_argument("--max-files", type=int, default=None, help="development/testing: limit export files per source")
+    cache_download.add_argument("--cache-path", type=Path, default=None)
+    cache_download.set_defaults(func=cmd_feature_cache_download)
+
+    cache_search = cache_subparsers.add_parser("search", help="search cached labels")
+    cache_search.add_argument("query")
+    cache_search.add_argument("--model-id", default=None)
+    cache_search.add_argument("--source", "--sae-id", dest="source", default=None)
+    cache_search.add_argument("--limit", type=int, default=20)
+    cache_search.add_argument("--cache-path", type=Path, default=None)
+    cache_search.set_defaults(func=cmd_feature_cache_search)
+
+    cache_show = cache_subparsers.add_parser("show", help="show cached labels for one feature")
+    cache_show.add_argument("--model-id", required=True)
+    cache_show.add_argument("--source", "--sae-id", dest="source", required=True)
+    cache_show.add_argument("--feature-id", required=True, type=int)
+    cache_show.add_argument("--cache-path", type=Path, default=None)
+    cache_show.set_defaults(func=cmd_feature_cache_show)
+
+    cache_status = cache_subparsers.add_parser("status", help="show cached model/source coverage")
+    cache_status.add_argument("--cache-path", type=Path, default=None)
+    cache_status.set_defaults(func=cmd_feature_cache_status)
 
     return parser
 
@@ -192,6 +249,18 @@ def cmd_chat(args: argparse.Namespace) -> int:
         print()
 
 
+def cmd_ui(args: argparse.Namespace) -> int:
+    from steering.tui import run_tui
+
+    run_tui(
+        server_url=args.server_url,
+        max_tokens=args.max_tokens,
+        temperature=args.temperature,
+        state_path=args.state_path,
+    )
+    return 0
+
+
 def cmd_health(args: argparse.Namespace) -> int:
     client = LocalServerClient.from_env(args.server_url)
     print(json.dumps(client.health(), indent=2, sort_keys=True))
@@ -212,6 +281,112 @@ def cmd_feature(args: argparse.Namespace) -> int:
     else:
         print(summarize_feature(data))
     return 0
+
+
+def cmd_feature_cache_models(args: argparse.Namespace) -> int:
+    client = NeuronpediaDatasetClient()
+    models = client.list_models()
+    for model in models:
+        print(model)
+    print(f"{len(models)} model(s)")
+    return 0
+
+
+def cmd_feature_cache_sources(args: argparse.Namespace) -> int:
+    client = NeuronpediaDatasetClient()
+    sources = client.list_sources(args.model_id)
+    if args.contains:
+        needle = args.contains.casefold()
+        sources = [source for source in sources if needle in source.casefold()]
+    for source in sources:
+        print(source)
+    print(f"{len(sources)} source(s)")
+    return 0
+
+
+def cmd_feature_cache_download(args: argparse.Namespace) -> int:
+    if args.limit_sources is not None and args.limit_sources < 1:
+        raise FeatureCacheError("limit-sources must be >= 1")
+
+    client = NeuronpediaDatasetClient()
+    cache_path = args.cache_path or default_feature_cache_path()
+    sources = list(args.sources)
+    if args.all_sources:
+        sources = client.list_sources(args.model_id)
+        if args.source_contains:
+            needle = args.source_contains.casefold()
+            sources = [source for source in sources if needle in source.casefold()]
+
+    if args.limit_sources is not None:
+        sources = sources[: args.limit_sources]
+
+    if not sources:
+        raise FeatureCacheError("provide --source/--sae-id, or use --all-sources")
+
+    print(f"cache: {cache_path}")
+    for source in sources:
+        print(f"downloading labels for {args.model_id}/{source}...")
+        cached = build_source_cache(
+            model_id=args.model_id,
+            source_id=source,
+            cache_path=cache_path,
+            dataset_client=client,
+            max_files=args.max_files,
+        )
+        print(
+            f"cached {cached.label_count} label(s) across {cached.feature_count} feature(s) "
+            f"for {cached.model_id}/{cached.source_id}"
+        )
+    return 0
+
+
+def cmd_feature_cache_search(args: argparse.Namespace) -> int:
+    cache = FeatureCache(args.cache_path)
+    labels = cache.search(
+        args.query,
+        model_id=args.model_id,
+        source_id=args.source,
+        limit=args.limit,
+    )
+    if not labels:
+        print("no cached labels matched")
+        return 0
+    for label in labels:
+        print(format_label(label))
+    return 0
+
+
+def cmd_feature_cache_show(args: argparse.Namespace) -> int:
+    cache = FeatureCache(args.cache_path)
+    labels = cache.get(model_id=args.model_id, source_id=args.source, feature_id=args.feature_id)
+    if not labels:
+        print("feature not found in cache")
+        return 0
+    for label in labels:
+        print(format_label(label))
+    return 0
+
+
+def cmd_feature_cache_status(args: argparse.Namespace) -> int:
+    cache = FeatureCache(args.cache_path)
+    rows = cache.status()
+    print(f"cache: {args.cache_path or default_feature_cache_path()}")
+    if not rows:
+        print("no cached sources")
+        return 0
+    for row in rows:
+        print(
+            f"{row.model_id}/{row.source_id}: "
+            f"{row.label_count} label(s), {row.feature_count} feature(s), fetched {row.fetched_at}"
+        )
+    return 0
+
+
+def format_label(label) -> str:
+    suffix = ""
+    if label.explanation_model_name:
+        suffix = f" [{label.explanation_model_name}]"
+    return f"{label.model_id}/{label.source_id}/{label.feature_id}: {label.description}{suffix}"
 
 
 def format_state(state) -> str:
