@@ -499,7 +499,11 @@ class SteeringTUITests(unittest.IsolatedAsyncioTestCase):
                 app.search_feature_cache()
                 await pilot.pause(0.2)
 
-                self.assertEqual([label.feature_id for label in app._cache_results], [204])
+                self.assertEqual(fake_dataset.downloads, [("gpt2-small", "6-res-jb"), ("gpt2-small", "8-res-jb")])
+                self.assertEqual([(label.source_id, label.feature_id) for label in app._cache_results], [
+                    ("6-res-jb", 204),
+                    ("8-res-jb", 204),
+                ])
                 app.apply_cached_feature()
                 await pilot.pause(0.1)
 
@@ -509,6 +513,25 @@ class SteeringTUITests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(app.query_one("#model-id", Input).value, "gpt2-small")
                 self.assertEqual(app.query_one("#label", Input).value, "time-related phrases and expressions")
                 self.assertEqual(app.query_one("#strength", Input).value, "10")
+
+    async def test_feature_cache_search_autocaches_residual_layers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            app = make_app(path)
+            fake_dataset = FakeDatasetClient()
+            app.dataset_client = fake_dataset
+
+            async with app.run_test(size=(140, 48)) as pilot:
+                await pilot.pause(0.1)
+                app.query_one("#cache-model-id", Input).value = "gpt2-small"
+                app.query_one("#cache-query", Input).value = "time phrases"
+
+                app.search_feature_cache()
+                await pilot.pause(0.4)
+
+                self.assertEqual(fake_dataset.downloads, [("gpt2-small", "6-res-jb"), ("gpt2-small", "8-res-jb")])
+                self.assertEqual(tuple(label.source_id for label in app._cache_results), ("6-res-jb", "8-res-jb"))
+                self.assertEqual(app.query_one("#cache-results", DataTable).row_count, 2)
 
     async def test_feature_cache_download_infers_source_from_layers(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

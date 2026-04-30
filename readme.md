@@ -110,8 +110,8 @@ Useful keys:
 | `F3` | Focus active steers. |
 | `F6` | Continue the current prompt. |
 | `F8` | Clear all active steers after confirmation. |
-| `F10` | List cache sources for the selected model. |
-| `F11` | Search cached labels. |
+| `F10` | Cache compatible residual JB layers for the selected model. |
+| `F11` | Search cached labels across compatible layers. |
 | `F12` | Apply the selected cached feature to the steer form. |
 | `Ctrl+C` | Quit the interface. |
 
@@ -153,13 +153,15 @@ Inside the interface:
 
    ```text
    Model: gpt2-small
-   Source: 6-res-jb
    Search: time phrases
    ```
 
-   Press `Download` once if that source is not cached yet, press `Search`,
-   select a result, then press `Apply` to copy its model/source/feature label
-   into the steer form.
+   Press `F10` or `Cache Layers` to cache compatible `0-res-jb` through
+   `11-res-jb` sources. You can also press `Search` directly; if the compatible
+   layer cache has not been prepared yet, the UI caches it first and continues
+   the search afterward. Results show `feature // layer // label`. Select a
+   result, then press `Apply` to copy its model/source/feature label into the
+   steer form.
 
 5. Press `Clear All` before ending the demo so no steer is left active.
 
@@ -218,17 +220,19 @@ model_id/source_id/feature_id
 For example, `gpt2-small/6-res-jb/204` and `gpt2-small/8-res-jb/204` are
 different features.
 
-In the UI, `Source` means this Neuronpedia source id. For the default GPT-2
-residual-stream SAEs it is usually layer shorthand plus `res-jb`: layer `6`
-uses `6-res-jb`, layer `8` uses `8-res-jb`, and so on. If the UI Source field
-is blank, Download and Inspect infer it from the steer form's `Layers` or
-`SAE Hook`; if those are blank too, the demo default is `6-res-jb`.
+In the UI, the normal cache path is model-first. Enter `gpt2-small`, then press
+`F10`/`Cache Layers` or search directly. The UI lists Neuronpedia sources for
+that model, keeps only compatible residual JB sources such as `0-res-jb`,
+`6-res-jb`, and `11-res-jb`, downloads any missing labels, and searches across
+those cached layers. Results show the feature id, the layer, and the label.
+Manual model/source listing and one-source downloads are still available under
+the collapsed `Advanced Source Controls` section at the bottom of the right
+pane.
 
-Search works against the local SQLite cache only. Run `download` first, then
-use `search` or `show` without waiting on Neuronpedia. Search is
-case-insensitive, splits the query into words, and returns labels whose
-description contains every query word. It is keyword search over cached
-descriptions, not embedding or semantic search.
+Search works against the local SQLite cache only. It is case-insensitive,
+splits the query into words, and returns labels whose description contains
+every query word. It is keyword search over cached descriptions, not embedding
+or semantic search.
 
 List models and sources available in the public export:
 
@@ -253,17 +257,15 @@ python steer.py feature-cache download \
   --source-contains res-jb
 ```
 
-Search cached labels:
+Search cached labels across every cached source for the model:
 
 ```bash
-python steer.py feature-cache search "time phrases" \
-  --model-id gpt2-small \
-  --source 6-res-jb \
-  --limit 10
+python steer.py feature-cache search "time phrases" --model-id gpt2-small --limit 10
 ```
 
-Leave off `--source` to search all cached sources for a model, or leave off
-both `--model-id` and `--source` to search the whole local cache:
+Use `--source` only when you intentionally want to restrict the CLI search to
+one source. Leave off both `--model-id` and `--source` to search the whole local
+cache:
 
 ```bash
 python steer.py feature-cache search "calendar dates" --model-id gpt2-small
@@ -402,7 +404,8 @@ Use `--temperature 0` for deterministic demos with the raw GPT-2 backend.
 python steer.py feature-cache models
 python steer.py feature-cache sources --model-id gpt2-small
 python steer.py feature-cache download --model-id gpt2-small --source 6-res-jb
-python steer.py feature-cache search "calendar dates" --model-id gpt2-small --source 6-res-jb
+python steer.py feature-cache download --model-id gpt2-small --all-sources --source-contains res-jb
+python steer.py feature-cache search "calendar dates" --model-id gpt2-small
 python steer.py feature-cache show --model-id gpt2-small --source 6-res-jb --feature-id 204
 python steer.py feature-cache status
 ```

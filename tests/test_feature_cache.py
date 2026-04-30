@@ -105,6 +105,32 @@ class FeatureCacheTests(unittest.TestCase):
             labels = cache.get(model_id="gpt2-small", source_id="6-res-jb", feature_id=1)
             self.assertEqual(labels[0].description, "grant funding references")
 
+    def test_cache_search_can_filter_multiple_sources(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = FeatureCache(Path(tmp) / "features.sqlite3")
+            cache.replace_source(
+                "gpt2-small",
+                "6-res-jb",
+                [FeatureLabel("gpt2-small", "6-res-jb", 204, "time-related phrases")],
+            )
+            cache.replace_source(
+                "gpt2-small",
+                "8-res-jb",
+                [FeatureLabel("gpt2-small", "8-res-jb", 205, "time-related phrases")],
+            )
+            cache.replace_source(
+                "gpt2-small",
+                "mlp-out",
+                [FeatureLabel("gpt2-small", "mlp-out", 206, "time-related phrases")],
+            )
+
+            results = cache.search("time phrases", model_id="gpt2-small", source_ids=("6-res-jb", "8-res-jb"))
+
+            self.assertEqual([(result.source_id, result.feature_id) for result in results], [
+                ("6-res-jb", 204),
+                ("8-res-jb", 205),
+            ])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -175,10 +175,13 @@ class FeatureCache:
         *,
         model_id: str | None = None,
         source_id: str | None = None,
+        source_ids: Iterable[str] | None = None,
         limit: int = 20,
     ) -> list[FeatureLabel]:
         if limit < 1:
             raise FeatureCacheError("limit must be >= 1")
+        if source_id and source_ids is not None:
+            raise FeatureCacheError("use source_id or source_ids, not both")
         terms = [term.casefold() for term in query.split() if term.strip()]
         if not terms:
             raise FeatureCacheError("search query cannot be empty")
@@ -191,6 +194,13 @@ class FeatureCache:
         if source_id:
             where.append("source_id = ?")
             params.append(source_id)
+        if source_ids is not None:
+            source_list = [source for source in source_ids if source.strip()]
+            if not source_list:
+                return []
+            placeholders = ", ".join("?" for _ in source_list)
+            where.append(f"source_id IN ({placeholders})")
+            params.extend(source_list)
         for term in terms:
             where.append("LOWER(description) LIKE ?")
             params.append(f"%{term}%")

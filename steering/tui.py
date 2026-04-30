@@ -4,13 +4,14 @@ from pathlib import Path
 import re
 import threading
 import time
+from typing import Iterable
 
 from rich.text import Text
 from textual import events
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.css.query import NoMatches
-from textual.widgets import Button, DataTable, Footer, Header, Input, Label, RichLog, Static
+from textual.widgets import Button, Collapsible, DataTable, Footer, Header, Input, Label, RichLog, Static
 
 from .feature_cache import (
     CachedSource,
@@ -54,6 +55,7 @@ CACHE_INPUT_IDS = frozenset(
     }
 )
 CACHE_SEARCH_LIMIT = 30
+RESIDUAL_JB_SOURCE_RE = re.compile(r"^(\d+)-res-jb$")
 
 
 class SteeringTUI(App):
@@ -201,7 +203,7 @@ class SteeringTUI(App):
         ("f7", "lookup_feature", "Lookup"),
         ("f8", "clear_steers", "Clear all"),
         ("f9", "check_backend", "Backend"),
-        ("f10", "list_cache_sources", "Sources"),
+        ("f10", "cache_residual_sources", "Cache"),
         ("f11", "search_feature_cache", "Search"),
         ("f12", "apply_cached_feature", "Apply"),
         ("tab", "focus_next", "Next"),
@@ -239,6 +241,7 @@ class SteeringTUI(App):
         self._model_loading = False
         self._source_loading = False
         self._cache_downloading = False
+        self._auto_cache_search_after_download = False
         self._cache_searching = False
         self._cache_inspecting = False
         self._clear_confirm_pending = False
@@ -252,6 +255,8 @@ class SteeringTUI(App):
         self._selected_cache_source: str | None = None
         self._cache_results: tuple[FeatureLabel, ...] = tuple()
         self._selected_cache_result_index: int | None = None
+        self._compatible_cache_sources: tuple[str, ...] = tuple()
+        self._residual_cache_ready_models: set[str] = set()
         self._stream_text = ""
 
     def compose(self) -> ComposeResult:
@@ -381,32 +386,11 @@ class SteeringTUI(App):
                         name="Cache model",
                         tooltip="Neuronpedia dataset model id.",
                     )
-                with Horizontal(classes="field-row"):
-                    yield Label("Filter", classes="field-label")
-                    yield Input(
-                        placeholder="optional source filter",
-                        id="cache-source-filter",
-                        name="Source filter",
-                        tooltip="Optional text used when listing export sources.",
-                    )
-                with Horizontal(classes="field-row"):
-                    yield Label("Source", classes="field-label")
-                    yield Input(
-                        placeholder="blank uses Layers, default 6-res-jb",
-                        id="cache-source",
-                        name="Cache source",
-                        tooltip="Neuronpedia source id. Blank uses the steer form layers; with no layer, 6-res-jb.",
-                    )
-                with Horizontal(id="feature-cache-actions"):
-                    yield Button("Models", id="list-models", tooltip="List available Neuronpedia export models.")
-                    yield Button("Sources", id="list-sources", tooltip="List sources for the cache model.")
-                    yield Button("Download", id="download-source", tooltip="Download labels for the selected source.")
-                    yield Button("Cached", id="show-cached", tooltip="Show cached sources.")
-                yield DataTable(id="source-table")
+                yield Static("Feature cache ready.", id="cache-status")
                 with Horizontal(classes="field-row"):
                     yield Label("Search", classes="field-label")
                     yield Input(
-                        placeholder="cached label search",
+                        placeholder="search all cached residual JB layers",
                         id="cache-query",
                         name="Feature search",
                         tooltip="Search cached labels. Press Enter or F11.",
@@ -414,18 +398,41 @@ class SteeringTUI(App):
                 with Horizontal(classes="field-row"):
                     yield Label("Feature", classes="field-label")
                     yield Input(
-                        placeholder="feature id",
+                        placeholder="optional feature id across layers",
                         id="cache-feature-id",
                         name="Cached feature id",
-                        tooltip="Cached feature id to inspect.",
+                        tooltip="Cached feature id to inspect across compatible residual JB layers.",
                     )
                 with Horizontal(classes="row"):
+                    yield Button("Cache Layers", id="cache-compatible", tooltip="Cache every compatible residual JB layer for the model.")
                     yield Button("Search", id="search-cache", variant="primary", tooltip="Search cached labels.")
-                    yield Button("Inspect", id="inspect-cache", tooltip="Show cached labels for one feature.")
+                    yield Button("Inspect", id="inspect-cache", tooltip="Show cached labels for one feature across layers.")
                     yield Button("Apply", id="apply-cache", tooltip="Apply the selected cached feature to the steer form.")
-                yield Static("Feature cache ready.", id="cache-status")
                 yield DataTable(id="cache-results")
                 yield RichLog(id="feature-log", wrap=True, highlight=True, markup=True)
+                with Collapsible(title="Advanced Source Controls", collapsed=True, id="advanced-cache-controls"):
+                    with Horizontal(classes="field-row"):
+                        yield Label("Filter", classes="field-label")
+                        yield Input(
+                            placeholder="optional source filter",
+                            id="cache-source-filter",
+                            name="Source filter",
+                            tooltip="Optional text used when listing export sources.",
+                        )
+                    with Horizontal(classes="field-row"):
+                        yield Label("Source", classes="field-label")
+                        yield Input(
+                            placeholder="manual source, e.g. 6-res-jb",
+                            id="cache-source",
+                            name="Cache source",
+                            tooltip="Advanced: explicit Neuronpedia source id for manual listing/download.",
+                        )
+                    with Horizontal(id="feature-cache-actions"):
+                        yield Button("Models", id="list-models", tooltip="List available Neuronpedia export models.")
+                        yield Button("Sources", id="list-sources", tooltip="List sources for the cache model.")
+                        yield Button("Download", id="download-source", tooltip="Download labels for the selected source.")
+                        yield Button("Cached", id="show-cached", tooltip="Show cached sources.")
+                    yield DataTable(id="source-table")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -443,7 +450,7 @@ class SteeringTUI(App):
         result_table.cursor_type = "row"
         result_table.zebra_stripes = True
         result_table.tooltip = "Use arrow keys to choose a cached feature. Press Enter or F12 to apply it."
-        result_table.add_columns("feature", "source", "label")
+        result_table.add_columns("feature", "layer", "label")
         self.query_one("#prompt", Input).focus()
         self.refresh_state()
         self.refresh_cache_status()
@@ -470,6 +477,9 @@ class SteeringTUI(App):
 
     def action_list_cache_sources(self) -> None:
         self.list_cache_sources()
+
+    def action_cache_residual_sources(self) -> None:
+        self.cache_residual_sources()
 
     def action_list_cache_models(self) -> None:
         self.list_cache_models()
@@ -552,7 +562,9 @@ class SteeringTUI(App):
                 self.update_selected_steer()
         elif event.input.id in GENERATION_INPUT_IDS:
             self.query_one("#prompt", Input).focus()
-        elif event.input.id in {"cache-model-id", "cache-source-filter"}:
+        elif event.input.id == "cache-model-id":
+            self.cache_residual_sources()
+        elif event.input.id == "cache-source-filter":
             self.list_cache_sources()
         elif event.input.id == "cache-source":
             self.download_cache_source()
@@ -626,6 +638,8 @@ class SteeringTUI(App):
             self.list_cache_sources()
         elif button_id == "download-source":
             self.download_cache_source()
+        elif button_id == "cache-compatible":
+            self.cache_residual_sources()
         elif button_id == "show-cached":
             self.refresh_cache_status(show_table=True)
         elif button_id == "search-cache":
@@ -830,6 +844,12 @@ class SteeringTUI(App):
             return
 
         self._cached_source_status = {(row.model_id, row.source_id): row for row in rows}
+        model_id = self.query_one("#cache-model-id", Input).value.strip()
+        if model_id:
+            self._compatible_cache_sources = tuple(
+                source
+                for source in compatible_residual_jb_sources(row.source_id for row in rows if row.model_id == model_id)
+            )
         cache_path = self.cache_path or default_feature_cache_path()
         if rows:
             self._set_cache_status(f"{len(rows)} cached source(s) at {cache_path}.", "success")
@@ -847,6 +867,23 @@ class SteeringTUI(App):
                     [f"{row.model_id}/{row.source_id}" for row in rows],
                     mode="cached",
                 )
+
+    def cache_residual_sources(self) -> None:
+        if self._cache_downloading:
+            self._set_cache_status("Compatible layer cache is already running.", "error")
+            return
+
+        try:
+            model_id = self._read_cache_model()
+        except SteeringError as exc:
+            self._set_cache_status(str(exc), "error")
+            return
+
+        self._cache_downloading = True
+        self._set_cache_status(f"Caching compatible residual JB layers for {model_id}...", "success")
+        self._sync_buttons()
+        self.log_feature(f"[dim]Caching compatible residual JB layers for {model_id}...[/dim]")
+        threading.Thread(target=self._download_residual_sources_thread, args=(model_id,), daemon=True).start()
 
     def list_cache_models(self) -> None:
         if self._model_loading:
@@ -908,15 +945,22 @@ class SteeringTUI(App):
 
         try:
             model_id = self._read_cache_model(allow_blank=True)
-            source_id = self._read_cache_source(required=False)
         except SteeringError as exc:
             self._set_cache_status(str(exc), "error")
+            return
+        source_ids = self._compatible_cached_sources_for_model(model_id)
+        if model_id and model_id not in self._residual_cache_ready_models:
+            self._auto_cache_search_after_download = True
+            if self._cache_downloading:
+                self._set_cache_status("Compatible layer cache is running; search will continue when it finishes.", "success")
+                return
+            self.cache_residual_sources()
             return
 
         self._cache_searching = True
         self._set_cache_status(f"Searching cached labels for {query!r}...", "success")
         self._sync_buttons()
-        threading.Thread(target=self._search_cache_thread, args=(query, model_id, source_id), daemon=True).start()
+        threading.Thread(target=self._search_cache_thread, args=(query, model_id, source_ids), daemon=True).start()
 
     def inspect_cached_feature(self) -> None:
         if self._cache_inspecting:
@@ -924,17 +968,17 @@ class SteeringTUI(App):
             return
 
         try:
-            model_id, source_id, feature_id = self._read_cached_feature_target()
+            model_id, source_ids, feature_id = self._read_cached_feature_target()
         except SteeringError as exc:
             self._set_cache_status(str(exc), "error")
             return
 
         self._cache_inspecting = True
-        self._set_cache_status(f"Inspecting cached feature {feature_id}...", "success")
+        self._set_cache_status(f"Inspecting cached feature {feature_id} across layers...", "success")
         self._sync_buttons()
         threading.Thread(
             target=self._inspect_cached_feature_thread,
-            args=(model_id, source_id, feature_id),
+            args=(model_id, source_ids, feature_id),
             daemon=True,
         ).start()
 
@@ -1119,12 +1163,63 @@ class SteeringTUI(App):
         finally:
             self._call_from_worker(self._finish_cache_download)
 
-    def _search_cache_thread(self, query: str, model_id: str | None, source_id: str | None) -> None:
+    def _download_residual_sources_thread(self, model_id: str) -> None:
+        try:
+            sources = compatible_residual_jb_sources(self.dataset_client.list_sources(model_id))
+            if not sources:
+                self._call_from_worker(
+                    self._set_cache_status,
+                    f"No compatible residual JB sources found for {model_id}.",
+                    "error",
+                )
+                return
+
+            cache = self._feature_cache()
+            cached_status = {
+                row.source_id: row
+                for row in cache.status()
+                if row.model_id == model_id and row.source_id in sources and row.label_count > 0
+            }
+            missing_sources = [source for source in sources if source not in cached_status]
+            downloaded: list[CachedSource] = []
+            total_labels = sum(row.label_count for row in cached_status.values())
+            for index, source_id in enumerate(missing_sources, start=1):
+                self._call_from_worker(
+                    self._set_cache_status,
+                    f"Caching {model_id}/{source_id} ({index}/{len(missing_sources)})...",
+                    "success",
+                )
+                cached = build_source_cache(
+                    model_id=model_id,
+                    source_id=source_id,
+                    cache_path=self.cache_path,
+                    dataset_client=self.dataset_client,
+                )
+                downloaded.append(cached)
+                total_labels += cached.label_count
+
+            rows = self._feature_cache().status()
+            self._call_from_worker(
+                self._apply_residual_cache_result,
+                model_id,
+                sources,
+                rows,
+                downloaded,
+                total_labels,
+            )
+        except Exception as exc:
+            self._auto_cache_search_after_download = False
+            self._call_from_worker(self.log_feature, f"[bold red]Compatible cache failed:[/bold red] {exc}")
+            self._call_from_worker(self._set_cache_status, f"Compatible cache failed: {exc}", "error")
+        finally:
+            self._call_from_worker(self._finish_cache_download)
+
+    def _search_cache_thread(self, query: str, model_id: str | None, source_ids: tuple[str, ...]) -> None:
         try:
             labels = self._feature_cache().search(
                 query,
                 model_id=model_id or None,
-                source_id=source_id or None,
+                source_ids=source_ids or None,
                 limit=CACHE_SEARCH_LIMIT,
             )
             self._call_from_worker(self._apply_cache_results, labels, f"Search matched {len(labels)} feature label(s).")
@@ -1134,13 +1229,16 @@ class SteeringTUI(App):
         finally:
             self._call_from_worker(self._finish_cache_search)
 
-    def _inspect_cached_feature_thread(self, model_id: str, source_id: str, feature_id: int) -> None:
+    def _inspect_cached_feature_thread(self, model_id: str, source_ids: tuple[str, ...], feature_id: int) -> None:
         try:
-            labels = self._feature_cache().get(model_id=model_id, source_id=source_id, feature_id=feature_id)
+            labels: list[FeatureLabel] = []
+            cache = self._feature_cache()
+            for source_id in source_ids:
+                labels.extend(cache.get(model_id=model_id, source_id=source_id, feature_id=feature_id))
             self._call_from_worker(
                 self._apply_cache_results,
                 labels,
-                f"Feature {feature_id} has {len(labels)} cached label(s).",
+                f"Feature {feature_id} has {len(labels)} cached label(s) across residual JB layers.",
             )
             if labels:
                 self._call_from_worker(self._log_cached_feature_labels, labels)
@@ -1209,11 +1307,10 @@ class SteeringTUI(App):
         except SteeringError as exc:
             raise SteeringError("Cache source is required, or provide a valid layer/SAE hook to infer it.") from exc
 
-    def _read_cached_feature_target(self) -> tuple[str, str, int]:
+    def _read_cached_feature_target(self) -> tuple[str, tuple[str, ...], int]:
         selected = self._selected_cache_label()
         try:
             model_id = self._read_cache_model(allow_blank=selected is not None)
-            source_id = self._read_cache_source(required=selected is None)
         except SteeringError:
             raise
 
@@ -1240,10 +1337,14 @@ class SteeringTUI(App):
 
         if selected is not None:
             model_id = model_id or selected.model_id
-            source_id = source_id or selected.source_id
-        if not model_id or not source_id:
-            raise SteeringError("Cache model and source are required.")
-        return model_id, source_id, feature_id
+        if not model_id:
+            raise SteeringError("Cache model is required.")
+        source_ids = self._compatible_cached_sources_for_model(model_id)
+        if selected is not None and selected.source_id not in source_ids:
+            source_ids = (*source_ids, selected.source_id)
+        if not source_ids:
+            raise SteeringError("No compatible residual JB layers are cached for this model.")
+        return model_id, source_ids, feature_id
 
     def _apply_model_list(self, models: list[str]) -> None:
         self._populate_source_table(None, models, mode="models")
@@ -1264,6 +1365,12 @@ class SteeringTUI(App):
 
     def _apply_download_result(self, cached: CachedSource) -> None:
         self._cached_source_status[(cached.model_id, cached.source_id)] = cached
+        if is_residual_jb_source(cached.source_id):
+            self._compatible_cache_sources = tuple(
+                compatible_residual_jb_sources(
+                    (*self._compatible_cache_sources, cached.source_id),
+                )
+            )
         self._set_cache_status(
             f"Cached {cached.label_count} label(s) for {cached.model_id}/{cached.source_id}.",
             "success",
@@ -1274,6 +1381,35 @@ class SteeringTUI(App):
         )
         self._refresh_visible_source_cache_markers(cached.model_id)
 
+    def _apply_residual_cache_result(
+        self,
+        model_id: str,
+        sources: list[str],
+        rows: list[CachedSource],
+        downloaded: list[CachedSource],
+        total_labels: int,
+    ) -> None:
+        self._cached_source_status = {(row.model_id, row.source_id): row for row in rows}
+        self._compatible_cache_sources = tuple(sources)
+        self._residual_cache_ready_models.add(model_id)
+        source_count = len(sources)
+        downloaded_count = len(downloaded)
+        self._set_cache_status(
+            f"Ready: {source_count} residual JB layer(s), {total_labels} cached label(s).",
+            "success",
+        )
+        if downloaded_count:
+            self.log_feature(
+                f"[green]Cached compatible layers[/green]: {downloaded_count} downloaded, "
+                f"{source_count} available for {model_id}."
+            )
+        else:
+            self.log_feature(f"[green]Compatible layers already cached[/green]: {source_count} available for {model_id}.")
+        self._populate_source_table(model_id, list(sources), mode="sources")
+        if self._auto_cache_search_after_download:
+            self._auto_cache_search_after_download = False
+            self.search_feature_cache()
+
     def _apply_cache_results(self, labels: list[FeatureLabel], message: str) -> None:
         self._cache_results = tuple(labels)
         self._selected_cache_result_index = None
@@ -1282,7 +1418,7 @@ class SteeringTUI(App):
         for index, label in enumerate(labels):
             table.add_row(
                 str(label.feature_id),
-                label.source_id,
+                layer_label_from_source(label.source_id),
                 compact_label(label.description),
                 key=f"cache-result-{index}",
             )
@@ -1366,6 +1502,29 @@ class SteeringTUI(App):
         if self._selected_cache_result_index >= len(self._cache_results):
             return None
         return self._cache_results[self._selected_cache_result_index]
+
+    def _compatible_cached_sources_for_model(self, model_id: str | None) -> tuple[str, ...]:
+        if not model_id:
+            return tuple()
+        source_ids = [
+            source_id
+            for (cached_model, source_id), cached in self._cached_source_status.items()
+            if cached_model == model_id and cached.label_count > 0 and is_residual_jb_source(source_id)
+        ]
+        if not source_ids:
+            try:
+                rows = self._feature_cache().status()
+            except Exception:
+                rows = []
+            source_ids = [
+                row.source_id
+                for row in rows
+                if row.model_id == model_id and row.label_count > 0 and is_residual_jb_source(row.source_id)
+            ]
+            for row in rows:
+                self._cached_source_status[(row.model_id, row.source_id)] = row
+        self._compatible_cache_sources = tuple(compatible_residual_jb_sources(source_ids))
+        return self._compatible_cache_sources
 
     def _read_generation_settings(self) -> tuple[int, float] | None:
         tokens_input = self.query_one("#max-tokens", Input)
@@ -1726,6 +1885,7 @@ class SteeringTUI(App):
             self.query_one("#remove-selected", Button).disabled = not has_selection
             self.query_one("#clear-steers", Button).disabled = not has_steers
             self.query_one("#lookup", Button).disabled = self._lookup_running
+            self.query_one("#cache-compatible", Button).disabled = self._cache_downloading
             self.query_one("#list-models", Button).disabled = self._model_loading
             self.query_one("#list-sources", Button).disabled = self._source_loading
             self.query_one("#download-source", Button).disabled = self._cache_downloading
@@ -1817,10 +1977,33 @@ def feature_label_from_data(data: dict) -> str | None:
 
 def steer_target_from_neuronpedia_source(source_id: str) -> tuple[str, str]:
     source_id = source_id.strip()
-    layer_match = re.fullmatch(r"(\d+)-res-jb", source_id)
+    layer_match = RESIDUAL_JB_SOURCE_RE.fullmatch(source_id)
     if layer_match:
         return layer_match.group(1), ""
     return "", source_id
+
+
+def is_residual_jb_source(source_id: str) -> bool:
+    return RESIDUAL_JB_SOURCE_RE.fullmatch(source_id.strip()) is not None
+
+
+def compatible_residual_jb_sources(sources: Iterable[str]) -> list[str]:
+    unique_sources = {source.strip() for source in sources if is_residual_jb_source(source)}
+    return sorted(unique_sources, key=residual_jb_layer)
+
+
+def residual_jb_layer(source_id: str) -> int:
+    match = RESIDUAL_JB_SOURCE_RE.fullmatch(source_id.strip())
+    if not match:
+        return 10**9
+    return int(match.group(1))
+
+
+def layer_label_from_source(source_id: str) -> str:
+    match = RESIDUAL_JB_SOURCE_RE.fullmatch(source_id.strip())
+    if match:
+        return match.group(1)
+    return source_id
 
 
 def compact_whitespace(text: str) -> str:
