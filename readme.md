@@ -129,6 +129,32 @@ The right pane shows active steers, feature lookup controls, and the local
 feature-label cache. Steering changes are written to `.steering/state.json`;
 the backend reads that state during generation.
 
+## Launch The Web Interface
+
+The FastAPI backend also serves a browser UI at the server root:
+
+```bash
+source .venv/bin/activate
+python steer.py serve
+```
+
+Open `http://127.0.0.1:8000/`.
+
+The web UI can:
+
+- Generate raw completions through the active backend model.
+- List Neuronpedia export models and source ids.
+- Switch/download a TransformerLens model with an explicit SAE Lens release and
+  layer SAE id template.
+- Download Neuronpedia explanation labels for a selected model/source into the
+  local feature cache.
+- Search cached labels and apply selected features to the shared steering state.
+
+For Neuronpedia residual JB sources such as `6-res-jb`, the UI maps the source
+to layer `6` and uses `STEERING_SAE_ID_TEMPLATE` for SAE Lens loading. For other
+source ids, the UI stores the source id as an explicit `sae_id`, so the selected
+SAE Lens release must contain a matching SAE id.
+
 Useful keys:
 
 | Key | Action |
@@ -442,6 +468,23 @@ python steer.py ui --server-url http://127.0.0.1:8000 --max-tokens 32 --temperat
 ```
 
 Use `--temperature 0` for deterministic demos with the raw GPT-2 backend.
+
+### Web API
+
+When the backend is running, the browser UI and JSON API are available from the
+same server:
+
+| Endpoint | Effect |
+|----------|--------|
+| `/` | Browser UI. |
+| `/health` | Active backend model, SAE release, device, and busy status. |
+| `/api/model` | Load/switch a TransformerLens model and SAE Lens release. |
+| `/api/state` | Read or clear the shared steering state. |
+| `/api/state/items` | Set or append an active steering feature. |
+| `/api/neuronpedia/models` | List models in the Neuronpedia public exports. |
+| `/api/neuronpedia/sources` | List source ids for a Neuronpedia model. |
+| `/api/cache/source` | Download labels for one Neuronpedia model/source. |
+| `/api/cache/search` | Search cached labels by model/source/query. |
 
 ### `feature-cache`
 
