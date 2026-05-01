@@ -23,6 +23,10 @@ class StateTests(unittest.TestCase):
         with self.assertRaises(SteeringError):
             parse_layers(" , ")
 
+    def test_steer_item_rejects_non_finite_strength(self) -> None:
+        with self.assertRaisesRegex(SteeringError, "strength must be finite"):
+            SteerItem(feature_id=204, strength=float("nan"), layers=(6,))
+
     def test_update_replace_append_and_clear(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "state.json"

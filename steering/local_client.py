@@ -69,7 +69,9 @@ class LocalServerClient:
         except error.URLError as exc:
             raise LocalServerError(f"could not reach local steering server at {self.base_url}") from exc
 
-        data = json.loads(body)
+        data = parse_json_response(body, source="server")
+        if not isinstance(data, dict):
+            raise LocalServerError(f"unexpected server response: {data!r}")
         if "error" in data:
             raise LocalServerError(str(data["error"]))
         yield str(data.get("text", ""))
@@ -90,7 +92,7 @@ class LocalServerClient:
         except error.URLError as exc:
             raise LocalServerError(f"could not reach local steering server at {self.base_url}") from exc
 
-        data = json.loads(body or "{}")
+        data = parse_json_response(body or "{}", source="server")
         if not isinstance(data, dict):
             raise LocalServerError(f"unexpected server response: {data!r}")
         if "error" in data:
@@ -127,3 +129,10 @@ def parse_timeout_env(name: str, default: float) -> float:
     if value <= 0:
         raise LocalServerError(f"{name} must be greater than 0")
     return value
+
+
+def parse_json_response(body: str, *, source: str) -> Any:
+    try:
+        return json.loads(body)
+    except json.JSONDecodeError as exc:
+        raise LocalServerError(f"invalid JSON response from {source}") from exc

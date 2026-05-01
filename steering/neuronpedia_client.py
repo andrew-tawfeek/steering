@@ -10,6 +10,7 @@ from .state import SteerItem, SteeringState
 
 
 DEFAULT_NEURONPEDIA_URL = "https://www.neuronpedia.org"
+DEFAULT_NEURONPEDIA_TIMEOUT = 120.0
 DEFAULT_STEERING_MODEL = "gpt2-small"
 DEFAULT_SAE_ID_TEMPLATE = "{layer}-res-jb"
 SUPPORTED_STEERING_MODELS = ("gpt2-small", "gemma-2b", "gemma-2b-it")
@@ -22,14 +23,17 @@ class NeuronpediaError(RuntimeError):
 @dataclass(frozen=True)
 class NeuronpediaClient:
     base_url: str = DEFAULT_NEURONPEDIA_URL
-    timeout: float = 120.0
+    timeout: float = DEFAULT_NEURONPEDIA_TIMEOUT
 
     @classmethod
     def from_env(cls, base_url: str | None = None) -> "NeuronpediaClient":
         raw_url = base_url or os.environ.get("NEURONPEDIA_BASE_URL") or DEFAULT_NEURONPEDIA_URL
         if not raw_url.startswith(("http://", "https://")):
             raw_url = f"https://{raw_url}"
-        return cls(base_url=raw_url.rstrip("/"))
+        return cls(
+            base_url=raw_url.rstrip("/"),
+            timeout=parse_timeout_env("STEERING_NEURONPEDIA_TIMEOUT", DEFAULT_NEURONPEDIA_TIMEOUT),
+        )
 
     def feature(self, model_id: str, sae_id: str, feature_id: int) -> dict[str, Any]:
         path = "/api/feature/{}/{}/{}".format(
@@ -93,12 +97,28 @@ class NeuronpediaClient:
 
         if not body:
             return {}
-        data = json.loads(body)
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError as exc:
+            raise NeuronpediaError("invalid JSON response from Neuronpedia") from exc
         if not isinstance(data, dict):
             raise NeuronpediaError(f"unexpected Neuronpedia response: {data!r}")
         if "error" in data:
             raise NeuronpediaError(str(data["error"]))
         return data
+
+
+def parse_timeout_env(name: str, default: float) -> float:
+    raw_value = os.environ.get(name)
+    if raw_value is None or not raw_value.strip():
+        return default
+    try:
+        value = float(raw_value)
+    except ValueError as exc:
+        raise NeuronpediaError(f"{name} must be a number") from exc
+    if value <= 0:
+        raise NeuronpediaError(f"{name} must be greater than 0")
+    return value
 
 
 def state_to_neuronpedia_features(

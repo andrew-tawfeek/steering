@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="/Users/atawfeek/GitHub/steering"
+ROOT_DIR="${STEERING_ROOT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 LOG_FILE="$ROOT_DIR/.steering/cli-interface-agent.log"
 HEARTBEAT_SECONDS="${CLI_AGENT_HEARTBEAT_SECONDS:-30}"
 
@@ -21,7 +21,7 @@ heartbeat() {
     changed_count="$(git status --short | wc -l | tr -d ' ')"
     codex_summary="$(
       ps -axo pid,etime,stat,command |
-        grep 'codex exec --cd /Users/atawfeek/GitHub/steering' |
+        grep "codex exec --cd $ROOT_DIR" |
         grep -v grep |
         head -n 1 |
         awk '{print "pid="$1" elapsed="$2" stat="$3}'

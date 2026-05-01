@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
+import math
+import os
 from pathlib import Path
 import sys
 
@@ -13,6 +16,7 @@ from steering.feature_cache import (
     build_source_cache,
     default_feature_cache_path,
 )
+from steering import __version__
 from steering.local_client import LocalServerClient, LocalServerError
 from steering.neuronpedia_client import (
     DEFAULT_STEERING_MODEL,
@@ -34,11 +38,17 @@ from steering.state import (
 DEFAULT_SERVER_URL = "http://127.0.0.1:8000"
 DEFAULT_TEMPERATURE = 0.0
 DEFAULT_UI_MAX_TOKENS = 32
+MAX_NEW_TOKENS = 512
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
-    args = parser.parse_args(argv)
+    try:
+        args = parser.parse_args(argv)
+    except SystemExit as exc:
+        if argv is None:
+            raise
+        return exc.code if isinstance(exc.code, int) else 2
     try:
         return args.func(args)
     except (SteeringError, LocalServerError, NeuronpediaError, FeatureCacheError) as exc:
@@ -49,6 +59,18 @@ def main(argv: list[str] | None = None) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Live SAE feature steering for a local hookable LLM backend.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "examples:\n"
+            "  ./start.sh\n"
+            "  python steer.py doctor\n"
+            "  python steer.py serve\n"
+            "  python steer.py health\n"
+            "  python steer.py generate \"The weather today is\" --max-tokens 20 --temperature 0\n"
+            "  python steer.py update --feature-id 204 --strength 10 --layers 6\n"
+            "  python steer.py feature --layer 6 --feature-id 204\n"
+            "  python steer.py feature-cache search \"time phrases\" --model-id gpt2-small\n"
+        ),
     )
     parser.add_argument(
         "--state-path",
@@ -56,11 +78,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Path to steering state JSON. Defaults to .steering/state.json.",
     )
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     update = subparsers.add_parser("update", help="replace or append a feature steer")
-    update.add_argument("--feature-id", required=True, type=int)
-    update.add_argument("--strength", required=True, type=float)
+    update.add_argument("--feature-id", required=True, type=non_negative_int)
+    update.add_argument("--strength", required=True, type=finite_float, help="finite scalar multiplier for the SAE decoder vector")
     update.add_argument("--layers", default=None, help="comma-separated layer list, such as 6 or 6,8,10")
     update.add_argument("--sae-id", default=None, help="explicit SAE id, such as blocks.6.hook_resid_pre")
     update.add_argument("--model-id", default=None, help="source model id for metadata, such as gpt2-small")
@@ -79,35 +102,47 @@ def build_parser() -> argparse.ArgumentParser:
 
     generate = subparsers.add_parser("generate", help="continue text through the local TransformerLens server")
     generate.add_argument("prompt", nargs="?", help="prompt text; stdin is used when omitted")
-    generate.add_argument("--server-url", default=DEFAULT_SERVER_URL)
-    generate.add_argument("--max-tokens", type=int, default=60)
-    generate.add_argument("--temperature", type=float, default=DEFAULT_TEMPERATURE)
-    generate.add_argument("--seed", type=int, default=None)
+    generate.add_argument("--server-url", default=DEFAULT_SERVER_URL, help=f"backend URL; default: {DEFAULT_SERVER_URL}")
+    generate.add_argument("--max-tokens", type=max_tokens_arg, default=60, help=f"new tokens to generate, 1-{MAX_NEW_TOKENS}")
+    generate.add_argument("--temperature", type=non_negative_float, default=DEFAULT_TEMPERATURE, help="sampling temperature; use 0 for deterministic greedy output")
+    generate.add_argument("--seed", type=int, default=None, help="optional random seed for sampled generation")
     generate.add_argument("--no-stream", action="store_true", help="wait for the full response before printing")
     generate.set_defaults(func=cmd_generate)
 
     chat = subparsers.add_parser("chat", help="interactive raw-completion loop through the local TransformerLens server")
-    chat.add_argument("--server-url", default=DEFAULT_SERVER_URL)
-    chat.add_argument("--max-tokens", type=int, default=DEFAULT_UI_MAX_TOKENS)
-    chat.add_argument("--temperature", type=float, default=DEFAULT_TEMPERATURE)
-    chat.add_argument("--seed", type=int, default=None)
+    chat.add_argument("--server-url", default=DEFAULT_SERVER_URL, help=f"backend URL; default: {DEFAULT_SERVER_URL}")
+    chat.add_argument("--max-tokens", type=max_tokens_arg, default=DEFAULT_UI_MAX_TOKENS, help=f"new tokens per turn, 1-{MAX_NEW_TOKENS}")
+    chat.add_argument("--temperature", type=non_negative_float, default=DEFAULT_TEMPERATURE, help="sampling temperature; use 0 for deterministic greedy output")
+    chat.add_argument("--seed", type=int, default=None, help="optional random seed for sampled generation")
     chat.set_defaults(func=cmd_chat)
 
     ui = subparsers.add_parser("ui", help="open the split-pane completion and steering interface")
-    ui.add_argument("--server-url", default=DEFAULT_SERVER_URL)
-    ui.add_argument("--max-tokens", type=int, default=DEFAULT_UI_MAX_TOKENS)
-    ui.add_argument("--temperature", type=float, default=DEFAULT_TEMPERATURE)
+    ui.add_argument("--server-url", default=DEFAULT_SERVER_URL, help=f"backend URL; default: {DEFAULT_SERVER_URL}")
+    ui.add_argument("--max-tokens", type=max_tokens_arg, default=DEFAULT_UI_MAX_TOKENS, help=f"default new tokens per completion, 1-{MAX_NEW_TOKENS}")
+    ui.add_argument("--temperature", type=non_negative_float, default=DEFAULT_TEMPERATURE, help="default sampling temperature; use 0 for deterministic greedy output")
     ui.set_defaults(func=cmd_ui)
 
     health = subparsers.add_parser("health", help="check the local TransformerLens server")
-    health.add_argument("--server-url", default=DEFAULT_SERVER_URL)
+    health.add_argument("--server-url", default=DEFAULT_SERVER_URL, help=f"backend URL; default: {DEFAULT_SERVER_URL}")
     health.set_defaults(func=cmd_health)
 
+    serve = subparsers.add_parser("serve", help="start the local TransformerLens FastAPI backend")
+    serve.add_argument("--host", default="127.0.0.1", help="interface to bind; default: 127.0.0.1")
+    serve.add_argument("--port", type=positive_int, default=8000, help="port to bind; default: 8000")
+    serve.add_argument("--reload", action="store_true", help="reload the backend process when code changes")
+    serve.set_defaults(func=cmd_serve)
+
+    doctor = subparsers.add_parser("doctor", help="check local setup, dependency imports, and backend reachability")
+    doctor.add_argument("--server-url", default=DEFAULT_SERVER_URL, help=f"backend URL to check; default: {DEFAULT_SERVER_URL}")
+    doctor.add_argument("--skip-server", action="store_true", help="do not check the backend /health endpoint")
+    doctor.add_argument("--json", action="store_true", help="print machine-readable diagnostic results")
+    doctor.set_defaults(func=cmd_doctor)
+
     feature = subparsers.add_parser("feature", help="look up feature metadata from Neuronpedia")
-    feature.add_argument("--feature-id", required=True, type=int)
+    feature.add_argument("--feature-id", required=True, type=non_negative_int)
     feature.add_argument("--model-id", default=DEFAULT_STEERING_MODEL)
     feature.add_argument("--sae-id", default=None, help="Neuronpedia SAE id, such as 6-res-jb")
-    feature.add_argument("--layer", type=int, default=None, help="layer shorthand for GPT-2 res-jb, such as 6")
+    feature.add_argument("--layer", type=non_negative_int, default=None, help="layer shorthand for GPT-2 res-jb, such as 6")
     feature.add_argument("--base-url", default=None)
     feature.add_argument("--json", action="store_true")
     feature.set_defaults(func=cmd_feature)
@@ -116,11 +151,13 @@ def build_parser() -> argparse.ArgumentParser:
     cache_subparsers = feature_cache.add_subparsers(dest="feature_cache_command", required=True)
 
     cache_models = cache_subparsers.add_parser("models", help="list models available in the Neuronpedia exports")
+    cache_models.add_argument("--json", action="store_true", help="print JSON model list")
     cache_models.set_defaults(func=cmd_feature_cache_models)
 
     cache_sources = cache_subparsers.add_parser("sources", help="list export sources for a model")
     cache_sources.add_argument("--model-id", required=True)
     cache_sources.add_argument("--contains", default=None, help="only show sources containing this text")
+    cache_sources.add_argument("--json", action="store_true", help="print JSON source list")
     cache_sources.set_defaults(func=cmd_feature_cache_sources)
 
     cache_download = cache_subparsers.add_parser(
@@ -132,28 +169,32 @@ def build_parser() -> argparse.ArgumentParser:
     cache_download.add_argument("--source", "--sae-id", action="append", dest="sources", default=[])
     cache_download.add_argument("--all-sources", action="store_true", help="cache every source for the model")
     cache_download.add_argument("--source-contains", default=None, help="filter --all-sources by substring")
-    cache_download.add_argument("--limit-sources", type=int, default=None, help="limit number of sources to cache")
-    cache_download.add_argument("--max-files", type=int, default=None, help="development/testing: limit export files per source")
+    cache_download.add_argument("--limit-sources", type=positive_int, default=None, help="limit number of sources to cache")
+    cache_download.add_argument("--max-files", type=positive_int, default=None, help="development/testing: limit export files per source")
     cache_download.add_argument("--cache-path", type=Path, default=None)
+    cache_download.add_argument("--json", action="store_true", help="print JSON cache results")
     cache_download.set_defaults(func=cmd_feature_cache_download)
 
     cache_search = cache_subparsers.add_parser("search", help="search cached labels")
     cache_search.add_argument("query")
     cache_search.add_argument("--model-id", default=None)
     cache_search.add_argument("--source", "--sae-id", dest="source", default=None)
-    cache_search.add_argument("--limit", type=int, default=20)
+    cache_search.add_argument("--limit", type=positive_int, default=20)
     cache_search.add_argument("--cache-path", type=Path, default=None)
+    cache_search.add_argument("--json", action="store_true", help="print JSON label results")
     cache_search.set_defaults(func=cmd_feature_cache_search)
 
     cache_show = cache_subparsers.add_parser("show", help="show cached labels for one feature")
     cache_show.add_argument("--model-id", required=True)
     cache_show.add_argument("--source", "--sae-id", dest="source", required=True)
-    cache_show.add_argument("--feature-id", required=True, type=int)
+    cache_show.add_argument("--feature-id", required=True, type=non_negative_int)
     cache_show.add_argument("--cache-path", type=Path, default=None)
+    cache_show.add_argument("--json", action="store_true", help="print JSON label results")
     cache_show.set_defaults(func=cmd_feature_cache_show)
 
     cache_status = cache_subparsers.add_parser("status", help="show cached model/source coverage")
     cache_status.add_argument("--cache-path", type=Path, default=None)
+    cache_status.add_argument("--json", action="store_true", help="print JSON cache status")
     cache_status.set_defaults(func=cmd_feature_cache_status)
 
     return parser
@@ -270,6 +311,25 @@ def cmd_health(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_serve(args: argparse.Namespace) -> int:
+    try:
+        import uvicorn
+    except ImportError as exc:
+        raise SteeringError("serve requires uvicorn; run ./start.sh or python -m pip install -r requirements.txt") from exc
+
+    uvicorn.run("server:app", host=args.host, port=args.port, reload=args.reload)
+    return 0
+
+
+def cmd_doctor(args: argparse.Namespace) -> int:
+    checks = run_doctor_checks(args)
+    if args.json:
+        print(json.dumps(checks, indent=2, sort_keys=True))
+    else:
+        print(format_doctor_checks(checks))
+    return 0 if all(check["ok"] for check in checks) else 1
+
+
 def cmd_feature(args: argparse.Namespace) -> int:
     sae_id = args.sae_id
     if sae_id is None:
@@ -289,6 +349,9 @@ def cmd_feature(args: argparse.Namespace) -> int:
 def cmd_feature_cache_models(args: argparse.Namespace) -> int:
     client = NeuronpediaDatasetClient()
     models = client.list_models()
+    if args.json:
+        print(json.dumps({"models": models, "count": len(models)}, indent=2, sort_keys=True))
+        return 0
     for model in models:
         print(model)
     print(f"{len(models)} model(s)")
@@ -301,6 +364,15 @@ def cmd_feature_cache_sources(args: argparse.Namespace) -> int:
     if args.contains:
         needle = args.contains.casefold()
         sources = [source for source in sources if needle in source.casefold()]
+    if args.json:
+        print(
+            json.dumps(
+                {"model_id": args.model_id, "sources": sources, "count": len(sources)},
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 0
     for source in sources:
         print(source)
     print(f"{len(sources)} source(s)")
@@ -308,9 +380,6 @@ def cmd_feature_cache_sources(args: argparse.Namespace) -> int:
 
 
 def cmd_feature_cache_download(args: argparse.Namespace) -> int:
-    if args.limit_sources is not None and args.limit_sources < 1:
-        raise FeatureCacheError("limit-sources must be >= 1")
-
     client = NeuronpediaDatasetClient()
     cache_path = args.cache_path or default_feature_cache_path()
     sources = list(args.sources)
@@ -326,9 +395,12 @@ def cmd_feature_cache_download(args: argparse.Namespace) -> int:
     if not sources:
         raise FeatureCacheError("provide --source/--sae-id, or use --all-sources")
 
-    print(f"cache: {cache_path}")
+    cached_rows = []
+    if not args.json:
+        print(f"cache: {cache_path}")
     for source in sources:
-        print(f"downloading labels for {args.model_id}/{source}...")
+        if not args.json:
+            print(f"downloading labels for {args.model_id}/{source}...")
         cached = build_source_cache(
             model_id=args.model_id,
             source_id=source,
@@ -336,9 +408,22 @@ def cmd_feature_cache_download(args: argparse.Namespace) -> int:
             dataset_client=client,
             max_files=args.max_files,
         )
+        cached_rows.append(cached)
+        if not args.json:
+            print(
+                f"cached {cached.label_count} label(s) across {cached.feature_count} feature(s) "
+                f"for {cached.model_id}/{cached.source_id}"
+            )
+    if args.json:
         print(
-            f"cached {cached.label_count} label(s) across {cached.feature_count} feature(s) "
-            f"for {cached.model_id}/{cached.source_id}"
+            json.dumps(
+                {
+                    "cache_path": str(cache_path),
+                    "sources": [cached_source_to_dict(row) for row in cached_rows],
+                },
+                indent=2,
+                sort_keys=True,
+            )
         )
     return 0
 
@@ -351,6 +436,9 @@ def cmd_feature_cache_search(args: argparse.Namespace) -> int:
         source_id=args.source,
         limit=args.limit,
     )
+    if args.json:
+        print(json.dumps([label_to_dict(label) for label in labels], indent=2, sort_keys=True))
+        return 0
     if not labels:
         print("no cached labels matched")
         return 0
@@ -362,6 +450,9 @@ def cmd_feature_cache_search(args: argparse.Namespace) -> int:
 def cmd_feature_cache_show(args: argparse.Namespace) -> int:
     cache = FeatureCache(args.cache_path)
     labels = cache.get(model_id=args.model_id, source_id=args.source, feature_id=args.feature_id)
+    if args.json:
+        print(json.dumps([label_to_dict(label) for label in labels], indent=2, sort_keys=True))
+        return 0
     if not labels:
         print("feature not found in cache")
         return 0
@@ -373,6 +464,18 @@ def cmd_feature_cache_show(args: argparse.Namespace) -> int:
 def cmd_feature_cache_status(args: argparse.Namespace) -> int:
     cache = FeatureCache(args.cache_path)
     rows = cache.status()
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "cache_path": str(args.cache_path or default_feature_cache_path()),
+                    "sources": [cached_source_to_dict(row) for row in rows],
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 0
     print(f"cache: {args.cache_path or default_feature_cache_path()}")
     if not rows:
         print("no cached sources")
@@ -390,6 +493,27 @@ def format_label(label) -> str:
     if label.explanation_model_name:
         suffix = f" [{label.explanation_model_name}]"
     return f"{label.model_id}/{label.source_id}/{label.feature_id}: {label.description}{suffix}"
+
+
+def label_to_dict(label) -> dict[str, object]:
+    return {
+        "model_id": label.model_id,
+        "source_id": label.source_id,
+        "feature_id": label.feature_id,
+        "description": label.description,
+        "type_name": label.type_name,
+        "explanation_model_name": label.explanation_model_name,
+    }
+
+
+def cached_source_to_dict(row) -> dict[str, object]:
+    return {
+        "model_id": row.model_id,
+        "source_id": row.source_id,
+        "label_count": row.label_count,
+        "feature_count": row.feature_count,
+        "fetched_at": row.fetched_at,
+    }
 
 
 def format_state(state) -> str:
@@ -411,6 +535,151 @@ def format_state(state) -> str:
 
 def resolved_state_path(args: argparse.Namespace) -> Path:
     return args.state_path or default_state_path()
+
+
+def run_doctor_checks(args: argparse.Namespace) -> list[dict[str, object]]:
+    state_path = resolved_state_path(args)
+    cache_path = default_feature_cache_path()
+    checks: list[dict[str, object]] = [
+        {
+            "name": "python",
+            "ok": sys.version_info >= (3, 10),
+            "detail": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro} at {sys.executable}",
+            "hint": "Use Python 3.12 when available.",
+        },
+        path_check("state-path", state_path),
+        path_check("feature-cache-path", cache_path),
+    ]
+
+    dependency_modules = [
+        ("fastapi", "backend API server"),
+        ("uvicorn", "backend web server"),
+        ("textual", "terminal UI"),
+        ("torch", "TransformerLens runtime"),
+        ("transformer_lens", "local model backend"),
+        ("sae_lens", "SAE decoder weights"),
+    ]
+    for module_name, purpose in dependency_modules:
+        checks.append(dependency_check(module_name, purpose))
+
+    if args.skip_server:
+        checks.append({"name": "backend", "ok": True, "detail": "skipped", "hint": ""})
+    else:
+        checks.append(backend_check(args.server_url))
+
+    return checks
+
+
+def path_check(name: str, path: Path) -> dict[str, object]:
+    parent = path.parent
+    if parent.exists():
+        writable = parent.is_dir() and is_writable_directory(parent)
+        return {
+            "name": name,
+            "ok": writable,
+            "detail": str(path),
+            "hint": "" if writable else f"Directory is not writable: {parent}",
+        }
+    return {
+        "name": name,
+        "ok": is_writable_directory(parent.parent),
+        "detail": str(path),
+        "hint": f"Directory will be created: {parent}",
+    }
+
+
+def dependency_check(module_name: str, purpose: str) -> dict[str, object]:
+    if importlib.util.find_spec(module_name) is not None:
+        return {"name": module_name, "ok": True, "detail": purpose, "hint": ""}
+    return {
+        "name": module_name,
+        "ok": False,
+        "detail": f"missing dependency for {purpose}",
+        "hint": "Run ./start.sh or python -m pip install -r requirements.txt.",
+    }
+
+
+def backend_check(server_url: str) -> dict[str, object]:
+    client = LocalServerClient.from_env(server_url)
+    try:
+        health = client.health()
+    except LocalServerError as exc:
+        return {
+            "name": "backend",
+            "ok": False,
+            "detail": str(exc),
+            "hint": "Start the backend with ./start.sh or python steer.py serve.",
+        }
+    model = health.get("model_name", "unknown")
+    device = health.get("device", "unknown")
+    return {"name": "backend", "ok": True, "detail": f"{model} on {device}", "hint": ""}
+
+
+def is_writable_directory(path: Path) -> bool:
+    try:
+        return path.exists() and path.is_dir() and os_access_writable(path)
+    except OSError:
+        return False
+
+
+def os_access_writable(path: Path) -> bool:
+    return os.access(path, os.W_OK)
+
+
+def format_doctor_checks(checks: list[dict[str, object]]) -> str:
+    lines = ["Steering doctor:"]
+    for check in checks:
+        status = "ok" if check["ok"] else "missing"
+        lines.append(f"  [{status}] {check['name']}: {check['detail']}")
+        hint = str(check.get("hint") or "")
+        if hint and not check["ok"]:
+            lines.append(f"        {hint}")
+    return "\n".join(lines)
+
+
+def positive_int(raw: str) -> int:
+    value = int_arg(raw)
+    if value < 1:
+        raise argparse.ArgumentTypeError("must be >= 1")
+    return value
+
+
+def non_negative_int(raw: str) -> int:
+    value = int_arg(raw)
+    if value < 0:
+        raise argparse.ArgumentTypeError("must be >= 0")
+    return value
+
+
+def max_tokens_arg(raw: str) -> int:
+    value = positive_int(raw)
+    if value > MAX_NEW_TOKENS:
+        raise argparse.ArgumentTypeError(f"must be <= {MAX_NEW_TOKENS}")
+    return value
+
+
+def int_arg(raw: str) -> int:
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be an integer") from exc
+
+
+def non_negative_float(raw: str) -> float:
+    value = finite_float(raw)
+    if value < 0:
+        raise argparse.ArgumentTypeError("must be >= 0")
+    return value
+
+
+def finite_float(raw: str) -> float:
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be a number") from exc
+    if not math.isfinite(value):
+        raise argparse.ArgumentTypeError("must be finite")
+    return value
 
 
 if __name__ == "__main__":

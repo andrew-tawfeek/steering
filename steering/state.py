@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import json
+import math
 import os
 from pathlib import Path
 from typing import Any
@@ -29,6 +30,8 @@ class SteerItem:
     def __post_init__(self) -> None:
         if self.feature_id < 0:
             raise SteeringError("feature_id must be >= 0")
+        if not math.isfinite(self.strength):
+            raise SteeringError("strength must be finite")
         if not self.layers and not self.sae_id:
             raise SteeringError("at least one layer or sae_id is required")
         if any(layer < 0 for layer in self.layers):

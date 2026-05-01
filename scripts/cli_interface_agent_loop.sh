@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="/Users/atawfeek/GitHub/steering"
-BRANCH="CLI-interface"
+ROOT_DIR="${STEERING_ROOT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+BRANCH="${CLI_AGENT_BRANCH:-$(git -C "$ROOT_DIR" branch --show-current 2>/dev/null || printf main)}"
 LOG_DIR="$ROOT_DIR/.steering"
 LOG_FILE="$LOG_DIR/cli-interface-agent.log"
 HEARTBEAT_SECONDS="${CLI_AGENT_HEARTBEAT_SECONDS:-30}"
@@ -76,7 +76,7 @@ while true; do
     --cd "$ROOT_DIR" \
     --full-auto \
     --sandbox workspace-write \
-    "You are working on branch CLI-interface of the steering repo. Continue developing the terminal UI launched by start.sh. Focus only on the CLI/TUI interface: left-pane chat/model workflow, right-pane live feature steering controls, editing/selecting/clearing active steers, accessibility, keyboard navigation, error states, and UI/UX polish. New handoff: /Users/atawfeek/GitHub/steering2 main now contains a merged feature-cache implementation (merge commit c0a7ca8) with steering/feature_cache.py and steer.py feature-cache commands. Pull that feature search ability into the TUI: let users choose/list sources for a model, download/cache Neuronpedia feature labels, search cached labels, inspect a feature id, and apply a selected feature to the active steer form without leaving the interface. Preserve the existing TransformerLens/SAE backend. Run relevant tests. Do not touch unrelated backend behavior unless needed by the UI." \
+    "You are working on branch $BRANCH of the steering repo at $ROOT_DIR. Continue developing and hardening the terminal UI launched by start.sh. Focus only on the CLI/TUI interface: left-pane completion workflow, right-pane live feature steering controls, editing/selecting/clearing active steers, accessibility, keyboard navigation, error states, feature-cache workflows, and UI/UX polish. Preserve the existing TransformerLens/SAE backend. Run relevant tests. Do not touch unrelated backend behavior unless needed by the UI." \
     > >(prefix_stream codex) \
     2> >(prefix_stream codex) &
   codex_pid="$!"

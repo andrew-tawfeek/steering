@@ -17,6 +17,7 @@ import xml.etree.ElementTree as ET
 DATASET_BASE_URL = "https://neuronpedia-datasets.s3.us-east-1.amazonaws.com"
 DATASET_VERSION = "v1"
 DEFAULT_CACHE_PATH = ".steering/feature-cache.sqlite3"
+DEFAULT_DATASET_TIMEOUT = 120.0
 
 
 class FeatureCacheError(RuntimeError):
@@ -237,9 +238,12 @@ class FeatureCache:
 
 
 class NeuronpediaDatasetClient:
-    def __init__(self, base_url: str = DATASET_BASE_URL, timeout: float = 120.0) -> None:
+    def __init__(self, base_url: str = DATASET_BASE_URL, timeout: float | None = None) -> None:
         self.base_url = base_url.rstrip("/")
-        self.timeout = timeout
+        self.timeout = timeout if timeout is not None else parse_timeout_env(
+            "STEERING_NEURONPEDIA_DATASET_TIMEOUT",
+            DEFAULT_DATASET_TIMEOUT,
+        )
 
     def list_models(self) -> list[str]:
         prefixes = self._list_common_prefixes(f"{DATASET_VERSION}/")
@@ -283,7 +287,10 @@ class NeuronpediaDatasetClient:
                 line = raw_line.decode("utf-8").strip()
                 if not line:
                     continue
-                row = json.loads(line)
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError as exc:
+                    raise FeatureCacheError(f"invalid JSONL row in {key}") from exc
                 description = str(row.get("description") or "").strip()
                 if not description:
                     continue
@@ -320,7 +327,10 @@ class NeuronpediaDatasetClient:
             if continuation is not None:
                 query["continuation-token"] = continuation
             xml = self._read_text("/?" + parse.urlencode(query))
-            root = ET.fromstring(xml)
+            try:
+                root = ET.fromstring(xml)
+            except ET.ParseError as exc:
+                raise FeatureCacheError(f"invalid dataset export listing for {prefix}") from exc
             namespace = {"s3": "http://s3.amazonaws.com/doc/2006-03-01/"}
             keys.extend(node.text or "" for node in root.findall("s3:Contents/s3:Key", namespace))
             prefixes.extend(node.text or "" for node in root.findall("s3:CommonPrefixes/s3:Prefix", namespace))
@@ -358,6 +368,19 @@ def build_source_cache(
     client = dataset_client or NeuronpediaDatasetClient()
     labels = client.download_source_labels(model_id, source_id, max_files=max_files)
     return FeatureCache(cache_path).replace_source(model_id, source_id, labels)
+
+
+def parse_timeout_env(name: str, default: float) -> float:
+    raw_value = os.environ.get(name)
+    if raw_value is None or not raw_value.strip():
+        return default
+    try:
+        value = float(raw_value)
+    except ValueError as exc:
+        raise FeatureCacheError(f"{name} must be a number") from exc
+    if value <= 0:
+        raise FeatureCacheError(f"{name} must be greater than 0")
+    return value
 
 
 def row_to_label(row: sqlite3.Row) -> FeatureLabel:

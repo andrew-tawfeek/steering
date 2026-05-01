@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import math
 import re
 import threading
 import time
@@ -824,7 +825,7 @@ class SteeringTUI(App):
             return
 
         try:
-            feature_id, sae_id = self._read_lookup_target()
+            model_id, sae_id, feature_id = self._read_lookup_target()
         except SteeringError as exc:
             self._set_form_status("Lookup needs a feature id and layer.", "error")
             self.log_feature(f"[bold red]Lookup needs a feature id and layer:[/bold red] {exc}")
@@ -833,8 +834,8 @@ class SteeringTUI(App):
         self._lookup_running = True
         self._set_form_status(f"Looking up feature {feature_id}.", "success")
         self._sync_buttons()
-        self.log_feature(f"[dim]Looking up {DEFAULT_STEERING_MODEL}/{sae_id}/{feature_id}...[/dim]")
-        threading.Thread(target=self._lookup_thread, args=(sae_id, feature_id), daemon=True).start()
+        self.log_feature(f"[dim]Looking up {model_id}/{sae_id}/{feature_id}...[/dim]")
+        threading.Thread(target=self._lookup_thread, args=(model_id, sae_id, feature_id), daemon=True).start()
 
     def refresh_cache_status(self, *, show_table: bool = False) -> None:
         try:
@@ -1113,9 +1114,9 @@ class SteeringTUI(App):
                 close()
             self._call_from_worker(self._finish_generation)
 
-    def _lookup_thread(self, sae_id: str, feature_id: int) -> None:
+    def _lookup_thread(self, model_id: str, sae_id: str, feature_id: int) -> None:
         try:
-            data = self.neuronpedia.feature(DEFAULT_STEERING_MODEL, sae_id, feature_id)
+            data = self.neuronpedia.feature(model_id, sae_id, feature_id)
             text = summarize_feature(data)
             self._call_from_worker(self._apply_lookup_result, text, data, feature_id)
         except Exception as exc:
@@ -1549,8 +1550,8 @@ class SteeringTUI(App):
 
         try:
             temperature = float(temperature_input.value.strip())
-            if temperature < 0:
-                raise SteeringError("temperature must be >= 0")
+            if not math.isfinite(temperature) or temperature < 0:
+                raise SteeringError("temperature must be a finite number >= 0")
         except SteeringError as exc:
             temperature_input.set_class(True, "invalid")
             self._set_generation_status(str(exc), "error")
@@ -1564,12 +1565,13 @@ class SteeringTUI(App):
 
         return max_tokens, temperature
 
-    def _read_lookup_target(self) -> tuple[int, str]:
+    def _read_lookup_target(self) -> tuple[str, str, int]:
         feature_input = self.query_one("#feature-id", Input)
         layers_input = self.query_one("#layers", Input)
         sae_input = self.query_one("#sae-id", Input)
+        model_input = self.query_one("#model-id", Input)
 
-        for input_widget in (feature_input, layers_input, sae_input):
+        for input_widget in (feature_input, layers_input, sae_input, model_input):
             input_widget.set_class(False, "invalid")
 
         try:
@@ -1591,7 +1593,9 @@ class SteeringTUI(App):
             layers_input.focus()
             raise
 
-        return feature_id, sae_id
+        model_id = model_input.value.strip() or DEFAULT_STEERING_MODEL
+
+        return model_id, sae_id, feature_id
 
     def _read_form_item(self) -> SteerItem:
         feature_input = self.query_one("#feature-id", Input)
@@ -1625,6 +1629,8 @@ class SteeringTUI(App):
             if not strength_raw:
                 raise SteeringError("strength is required")
             strength = float(strength_raw)
+            if not math.isfinite(strength):
+                raise SteeringError("strength must be finite")
         except SteeringError:
             strength_input.set_class(True, "invalid")
             strength_input.focus()
@@ -2046,7 +2052,7 @@ def valid_temperature(raw: str) -> bool:
         value = float(raw.strip())
     except ValueError:
         return False
-    return value >= 0
+    return math.isfinite(value) and value >= 0
 
 
 def completion_text_for_ui(text: str) -> tuple[str, bool]:

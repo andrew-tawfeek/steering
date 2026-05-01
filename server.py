@@ -18,7 +18,7 @@ backend: TransformerLensSteeringBackend | None = None
 class GenerateRequest(BaseModel):
     prompt: str = Field(min_length=1)
     max_new_tokens: int = Field(default=60, ge=1, le=512)
-    temperature: float = Field(default=0.8, ge=0)
+    temperature: float = Field(default=0.8, ge=0, allow_inf_nan=False)
     seed: int | None = None
     stream: bool = True
 

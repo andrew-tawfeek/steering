@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "steering-cli"
+dynamic = ["version"]
+description = "Local CLI, TUI, and server for live SAE feature steering."
+readme = "readme.md"
+requires-python = ">=3.10"
+dependencies = [
+  "fastapi",
+  "textual",
+  "uvicorn[standard]",
+  "torch",
+  "transformer-lens",
+  "sae-lens",
+]
+
+[project.scripts]
+steer = "steering.cli:main"
+
+[tool.setuptools]
+py-modules = ["steer", "server"]
+packages = ["steering"]
+
+[tool.setuptools.dynamic]
+version = {attr = "steering.__version__"}

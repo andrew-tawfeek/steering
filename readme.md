@@ -32,19 +32,26 @@ Layer shorthand maps to SAE Lens hook ids. For example:
 
 ## Setup
 
-Use Python 3.12 on this Mac:
+Use Python 3.12 when available:
 
 ```bash
-/opt/homebrew/bin/python3.12 -m venv .venv
+python3.12 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip setuptools wheel
 python -m pip install -r requirements.txt
+python -m pip install -e .
 ```
+
+If `python3.12` is not on `PATH`, use your local Python 3 executable or set
+`STEERING_PYTHON=/path/to/python` before running `./start.sh`.
+After editable install, the `steer` console command is equivalent to
+`python steer.py`. Check the installed version with `steer --version`.
 
 The current environment has been verified with:
 
 ```bash
 python -m unittest discover -s tests
+python steer.py doctor --skip-server
 python steer.py feature --layer 6 --feature-id 204
 python steer.py feature-cache sources --model-id gpt2-small --contains res-jb
 ```
@@ -55,7 +62,7 @@ Terminal A:
 
 ```bash
 source .venv/bin/activate
-uvicorn server:app --host 127.0.0.1 --port 8000
+python steer.py serve
 ```
 
 The first startup downloads GPT-2 small. The first steered generation for a
@@ -80,6 +87,26 @@ Expected shape:
   "sae_release": "gpt2-small-res-jb"
 }
 ```
+
+For a broader setup check, including dependency imports, writable state/cache
+paths, and backend reachability, run:
+
+```bash
+python steer.py doctor
+```
+
+Use `--skip-server` before starting the backend, or `--json` when integrating
+the check into scripts.
+
+After the backend is running, run the local generation smoke test:
+
+```bash
+scripts/backend_smoke.sh
+```
+
+This uses an isolated temporary state file, checks `/health`, runs a baseline
+completion, applies feature `204` at layer `6`, runs a steered completion, then
+clears the temporary state.
 
 ## Launch The Terminal Interface
 
@@ -120,7 +147,6 @@ Useful keys:
 Start from the repo root:
 
 ```bash
-cd /Users/atawfeek/GitHub/steering
 git switch main
 ./start.sh
 ```
@@ -346,6 +372,15 @@ python steer.py show --json
 python steer.py clear
 ```
 
+### `serve`
+
+Start the local FastAPI backend:
+
+```bash
+python steer.py serve
+python steer.py serve --host 127.0.0.1 --port 8000
+```
+
 ### `generate`
 
 ```bash
@@ -362,6 +397,16 @@ Use a custom backend URL:
 
 ```bash
 python steer.py generate --server-url http://127.0.0.1:8000 "Hello"
+```
+
+### `doctor`
+
+Check local dependencies, state/cache paths, and backend health:
+
+```bash
+python steer.py doctor
+python steer.py doctor --skip-server
+python steer.py doctor --json
 ```
 
 ### `chat`
@@ -406,8 +451,10 @@ python steer.py feature-cache sources --model-id gpt2-small
 python steer.py feature-cache download --model-id gpt2-small --source 6-res-jb
 python steer.py feature-cache download --model-id gpt2-small --all-sources --source-contains res-jb
 python steer.py feature-cache search "calendar dates" --model-id gpt2-small
+python steer.py feature-cache search "calendar dates" --model-id gpt2-small --json
 python steer.py feature-cache show --model-id gpt2-small --source 6-res-jb --feature-id 204
 python steer.py feature-cache status
+python steer.py feature-cache status --json
 ```
 
 For development smoke tests, limit the export download:
@@ -432,7 +479,7 @@ Recommended usage:
 
 | Session | Purpose |
 |---------|---------|
-| `steering-backend` | Keep `uvicorn server:app --host 127.0.0.1 --port 8000` running. |
+| `steering-backend` | Keep `python steer.py serve` running. |
 
 `./start.sh` starts the backend automatically when it is not already running,
 so tmux is optional for normal demos.
@@ -450,8 +497,13 @@ Environment variables:
 | `STEERING_STATE_PATH` | `.steering/state.json` | Shared steering state path. |
 | `STEERING_FEATURE_CACHE_PATH` | `.steering/feature-cache.sqlite3` | SQLite cache for Neuronpedia labels. |
 | `STEERING_SERVER_URL` | `http://127.0.0.1:8000` | CLI target server. |
+| `STEERING_SERVER_HOST` | `127.0.0.1` | Host used by `./start.sh` when starting uvicorn. |
+| `STEERING_SERVER_PORT` | `8000` | Port used by `./start.sh` when starting uvicorn. |
+| `STEERING_PYTHON` | auto-detected | Python interpreter used by `./start.sh` when creating `.venv`. |
 | `STEERING_CLIENT_TIMEOUT` | `60` | Seconds before a CLI/UI request gives up. |
 | `STEERING_GENERATION_LOCK_TIMEOUT` | `30` | Seconds a generation waits for another token compute to finish. |
+| `STEERING_NEURONPEDIA_TIMEOUT` | `120` | Seconds before feature API requests give up. |
+| `STEERING_NEURONPEDIA_DATASET_TIMEOUT` | `120` | Seconds before public export downloads give up. |
 
 TransformerLens currently warns that MPS may produce incorrect results with
 PyTorch 2.11.0, and in this stack it can also leave a generation request stuck
@@ -460,14 +512,14 @@ backend explicitly on CPU:
 
 ```bash
 source .venv/bin/activate
-STEERING_DEVICE=cpu uvicorn server:app --host 127.0.0.1 --port 8000
+STEERING_DEVICE=cpu python steer.py serve
 ```
 
 To experiment with MPS anyway:
 
 ```bash
 source .venv/bin/activate
-STEERING_DEVICE=mps uvicorn server:app --host 127.0.0.1 --port 8000
+STEERING_DEVICE=mps python steer.py serve
 ```
 
 ## State File
@@ -505,6 +557,14 @@ python steer.py --state-path /tmp/steering.json show
 
 ```bash
 source .venv/bin/activate
+scripts/check.sh
+```
+
+The check script runs unit tests, Python compilation, shell syntax checks,
+version smoke checks, and packaging metadata consistency checks. The expanded
+manual form is:
+
+```bash
 python -m unittest discover -s tests
 python -m py_compile steer.py server.py steering/*.py tests/*.py
 python steer.py feature --layer 6 --feature-id 204
@@ -512,6 +572,12 @@ tmpdir=$(mktemp -d)
 python steer.py feature-cache download --model-id gpt2-small --source 6-res-jb --max-files 1 --cache-path "$tmpdir/cache.sqlite3"
 python steer.py feature-cache search time --model-id gpt2-small --source 6-res-jb --cache-path "$tmpdir/cache.sqlite3" --limit 3
 rm -rf "$tmpdir"
+```
+
+Backend smoke check, after starting the server:
+
+```bash
+scripts/backend_smoke.sh
 ```
 
 TUI smoke check:

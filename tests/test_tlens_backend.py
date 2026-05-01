@@ -11,6 +11,8 @@ from steering.tlens_backend import (
     DEFAULT_DEVICE,
     BackendConfig,
     TransformerLensSteeringBackend,
+    decoder_weight_for_sae,
+    hook_name_for_sae,
     parse_float_env,
     resolve_device,
     sae_ids_for_item,
@@ -139,6 +141,83 @@ class TransformerLensBackendTests(unittest.TestCase):
         with mock.patch.dict("os.environ", {"STEERING_GENERATION_LOCK_TIMEOUT": "0"}):
             with self.assertRaisesRegex(RuntimeError, "greater than 0"):
                 parse_float_env("STEERING_GENERATION_LOCK_TIMEOUT", 30.0)
+
+    def test_hook_name_prefers_metadata_then_config_then_fallback(self) -> None:
+        class Metadata:
+            hook_name = "metadata.hook"
+
+        class Config:
+            metadata = Metadata()
+            hook_name = "config.hook"
+
+        class Sae:
+            cfg = Config()
+
+        self.assertEqual(hook_name_for_sae(Sae(), "fallback.hook"), "metadata.hook")
+
+        class ConfigOnly:
+            metadata = object()
+            hook_name = "config.hook"
+
+        class ConfigOnlySae:
+            cfg = ConfigOnly()
+
+        self.assertEqual(hook_name_for_sae(ConfigOnlySae(), "fallback.hook"), "config.hook")
+        self.assertEqual(hook_name_for_sae(object(), "fallback.hook"), "fallback.hook")
+
+    def test_decoder_weight_supports_w_dec_and_decoder_module(self) -> None:
+        class DirectSae:
+            W_dec = "direct"
+
+        self.assertEqual(decoder_weight_for_sae(DirectSae()), "direct")
+
+        class Decoder:
+            weight = "module-weight"
+
+        class ModuleSae:
+            W_dec = None
+            decoder = Decoder()
+
+        self.assertEqual(decoder_weight_for_sae(ModuleSae()), "module-weight")
+
+    def test_decoder_weight_reports_missing_weights(self) -> None:
+        with self.assertRaisesRegex(SteeringError, "could not find SAE decoder weights"):
+            decoder_weight_for_sae(object())
+
+    def test_hooks_for_state_rejects_model_mismatch_before_loading_sae(self) -> None:
+        backend = object.__new__(TransformerLensSteeringBackend)
+        backend.config = BackendConfig(model_name="gpt2-small")
+        backend._load_sae = mock.Mock()
+
+        with self.assertRaisesRegex(SteeringError, "does not match backend model"):
+            backend._hooks_for_state(
+                state=mock.Mock(
+                    is_empty=False,
+                    items=(SteerItem(204, 10, (6,), model_id="other-model"),),
+                )
+            )
+
+        backend._load_sae.assert_not_called()
+
+    def test_hooks_for_state_rejects_out_of_range_feature_id(self) -> None:
+        backend = object.__new__(TransformerLensSteeringBackend)
+        backend.config = BackendConfig(model_name="gpt2-small")
+
+        class FakeDecoder:
+            shape = (2,)
+
+        class FakeSae:
+            W_dec = FakeDecoder()
+
+        backend._load_sae = mock.Mock(return_value=FakeSae())
+
+        with self.assertRaisesRegex(SteeringError, "feature_id 3 is out of range"):
+            backend._hooks_for_state(
+                state=mock.Mock(
+                    is_empty=False,
+                    items=(SteerItem(3, 10, (6,), model_id="gpt2-small"),),
+                )
+            )
 
 
 if __name__ == "__main__":

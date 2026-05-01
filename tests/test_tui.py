@@ -5,7 +5,12 @@ import time
 import unittest
 from pathlib import Path
 
-from textual.widgets import Button, DataTable, Input, Static
+try:
+    from textual.widgets import Button, DataTable, Input, Static
+except ModuleNotFoundError as exc:
+    if exc.name != "textual":
+        raise
+    raise unittest.SkipTest("textual is not installed") from exc
 
 from steering.feature_cache import FeatureCache, FeatureLabel
 from steering.state import SteerItem, load_state, update_state
@@ -416,6 +421,24 @@ class SteeringTUITests(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(app.query_one("#lookup", Button).disabled)
                 self.assertEqual(app.query_one("#label", Input).value, "test feature")
                 self.assertEqual(app.query_one("#strength", Input).value, "6.5")
+
+    async def test_lookup_uses_model_field_when_present(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            app = make_app(path)
+            fake_neuronpedia = FakeNeuronpedia()
+            app.neuronpedia = fake_neuronpedia
+
+            async with app.run_test(size=(120, 40)) as pilot:
+                await pilot.pause(0.1)
+                app.query_one("#feature-id", Input).value = "204"
+                app.query_one("#layers", Input).value = "6"
+                app.query_one("#model-id", Input).value = "custom-model"
+
+                app.lookup_feature()
+                await pilot.pause(0.2)
+
+                self.assertEqual(fake_neuronpedia.calls, [("custom-model", "6-res-jb", 204)])
 
     async def test_lookup_does_not_overwrite_existing_label_or_strength(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

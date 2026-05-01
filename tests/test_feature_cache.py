@@ -5,8 +5,9 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
-from steering.feature_cache import FeatureCache, FeatureLabel, NeuronpediaDatasetClient, sort_export_keys
+from steering.feature_cache import FeatureCache, FeatureCacheError, FeatureLabel, NeuronpediaDatasetClient, sort_export_keys
 
 
 class FakeDatasetClient(NeuronpediaDatasetClient):
@@ -38,6 +39,17 @@ class FeatureCacheTests(unittest.TestCase):
 
         self.assertEqual(client.list_models(), ["gemma-2-2b", "gpt2-small"])
 
+    def test_dataset_timeout_can_come_from_environment(self) -> None:
+        with mock.patch.dict("os.environ", {"STEERING_NEURONPEDIA_DATASET_TIMEOUT": "4.5"}):
+            client = NeuronpediaDatasetClient()
+
+        self.assertEqual(client.timeout, 4.5)
+
+    def test_dataset_timeout_rejects_non_positive_values(self) -> None:
+        with mock.patch.dict("os.environ", {"STEERING_NEURONPEDIA_DATASET_TIMEOUT": "0"}):
+            with self.assertRaisesRegex(FeatureCacheError, "greater than 0"):
+                NeuronpediaDatasetClient()
+
     def test_download_source_labels_parses_explanations_export(self) -> None:
         key = "v1/gpt2-small/6-res-jb/explanations/batch-0.jsonl.gz"
         client = FakeDatasetClient(
@@ -64,6 +76,13 @@ class FeatureCacheTests(unittest.TestCase):
         self.assertEqual(labels[0].feature_id, 204)
         self.assertEqual(labels[0].description, "time-related phrases")
         self.assertEqual(labels[0].type_name, "oai_token-act-pair")
+
+    def test_download_source_labels_reports_invalid_jsonl(self) -> None:
+        key = "v1/gpt2-small/6-res-jb/explanations/batch-0.jsonl.gz"
+        client = FakeDatasetClient({key: gzip.compress(b"not-json\n")})
+
+        with self.assertRaisesRegex(FeatureCacheError, "invalid JSONL row"):
+            client.download_source_labels("gpt2-small", "6-res-jb")
 
     def test_download_source_labels_uses_natural_batch_order_for_limits(self) -> None:
         keys = [
