@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "steering-cli"
 dynamic = ["version"]
 description = "Local CLI, TUI, and server for live SAE feature steering."
-readme = "readme.md"
+readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
   "fastapi",

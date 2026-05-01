@@ -224,15 +224,44 @@ class FeatureCache:
         source_id: str,
         feature_id: int,
     ) -> list[FeatureLabel]:
+        return self.get_feature_labels(
+            model_id=model_id,
+            feature_id=feature_id,
+            source_ids=(source_id,),
+        )
+
+    def get_feature_labels(
+        self,
+        *,
+        model_id: str,
+        feature_id: int,
+        source_ids: Iterable[str] | None = None,
+        limit: int = 20,
+    ) -> list[FeatureLabel]:
+        if limit < 1:
+            raise FeatureCacheError("limit must be >= 1")
+
+        where = ["model_id = ?", "feature_id = ?"]
+        params: list[Any] = [model_id, feature_id]
+        if source_ids is not None:
+            source_list = [source for source in dict.fromkeys(source_ids) if source.strip()]
+            if not source_list:
+                return []
+            placeholders = ", ".join("?" for _ in source_list)
+            where.append(f"source_id IN ({placeholders})")
+            params.extend(source_list)
+        params.append(limit)
+
         with self._connect() as conn:
             rows = conn.execute(
-                """
+                f"""
                 SELECT model_id, source_id, feature_id, description, type_name, explanation_model_name
                 FROM labels
-                WHERE model_id = ? AND source_id = ? AND feature_id = ?
+                WHERE {" AND ".join(where)}
                 ORDER BY explanation_model_name, type_name, description
+                LIMIT ?
                 """,
-                (model_id, source_id, feature_id),
+                params,
             ).fetchall()
         return [row_to_label(row) for row in rows]
 

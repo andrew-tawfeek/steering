@@ -31,21 +31,99 @@ class FakeBackend:
             "busy": False,
         }
 
-    def generate(self, prompt: str, *, max_new_tokens: int, temperature: float, seed: int | None):
-        self.requests.append(
-            {
-                "prompt": prompt,
-                "max_new_tokens": max_new_tokens,
-                "temperature": temperature,
-                "seed": seed,
-            }
-        )
+    def generate(
+        self,
+        prompt: str,
+        *,
+        max_new_tokens: int,
+        temperature: float,
+        seed: int | None,
+        state_override=None,
+        mode: str = "auto",
+        system_prompt: str | None = None,
+        stop_on_eos: bool | None = None,
+    ):
+        request = {
+            "prompt": prompt,
+            "max_new_tokens": max_new_tokens,
+            "temperature": temperature,
+            "seed": seed,
+        }
+        if state_override is not None:
+            request["state_override_empty"] = state_override.is_empty
+        if mode != "auto":
+            request["mode"] = mode
+        if system_prompt is not None:
+            request["system_prompt"] = system_prompt
+        if stop_on_eos is not None:
+            request["stop_on_eos"] = stop_on_eos
+        self.requests.append(request)
         yield "hi"
         yield "!"
 
+    def inspect_tokens(
+        self,
+        text: str,
+        *,
+        layers=None,
+        sae_id=None,
+        top_k: int = 5,
+        prompt: str | None = None,
+        include_prompt: bool = False,
+        mode: str = "auto",
+        system_prompt: str | None = None,
+    ) -> dict:
+        self.requests.append(
+            {
+                "text": text,
+                "layers": layers,
+                "sae_id": sae_id,
+                "top_k": top_k,
+                "prompt": prompt,
+                "include_prompt": include_prompt,
+                "mode": mode,
+                "system_prompt": system_prompt,
+            }
+        )
+        return {
+            "model_name": self.config.model_name,
+            "sae_release": self.config.sae_release,
+            "prompt_token_count": 1 if prompt else 0,
+            "token_count": 1,
+            "sources": [{"sae_id": "blocks.6.hook_resid_pre", "hook_name": "blocks.6.hook_resid_pre", "layer": 6}],
+            "tokens": [
+                {
+                    "position": 1 if prompt else 0,
+                    "token_id": 42,
+                    "text": " hi",
+                    "is_prompt": False,
+                    "features": [
+                        {
+                            "feature_id": 204,
+                            "activation": 2.5,
+                            "sae_id": "blocks.6.hook_resid_pre",
+                            "hook_name": "blocks.6.hook_resid_pre",
+                            "layer": 6,
+                        }
+                    ],
+                }
+            ],
+        }
+
 
 class ErrorBackend(FakeBackend):
-    def generate(self, prompt: str, *, max_new_tokens: int, temperature: float, seed: int | None):
+    def generate(
+        self,
+        prompt: str,
+        *,
+        max_new_tokens: int,
+        temperature: float,
+        seed: int | None,
+        state_override=None,
+        mode: str = "auto",
+        system_prompt: str | None = None,
+        stop_on_eos: bool | None = None,
+    ):
         raise SteeringError("bad steer")
 
 
@@ -105,6 +183,38 @@ class ServerTests(unittest.TestCase):
             [{"prompt": "hello", "max_new_tokens": 2, "temperature": 0.0, "seed": 123}],
         )
 
+    def test_generate_can_ignore_active_steers_for_baseline_runs(self) -> None:
+        backend = FakeBackend()
+        server.backend = backend
+
+        response = self.client.post(
+            "/generate",
+            json={"prompt": "hello", "stream": False, "steers_enabled": False},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(backend.requests[0]["state_override_empty"])
+
+    def test_generate_can_request_chat_mode(self) -> None:
+        backend = FakeBackend()
+        server.backend = backend
+
+        response = self.client.post(
+            "/generate",
+            json={
+                "prompt": "hello",
+                "stream": False,
+                "mode": "chat",
+                "system_prompt": "Answer as a lab assistant.",
+                "stop_on_eos": True,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(backend.requests[0]["mode"], "chat")
+        self.assertEqual(backend.requests[0]["system_prompt"], "Answer as a lab assistant.")
+        self.assertTrue(backend.requests[0]["stop_on_eos"])
+
     def test_generate_validates_request_shape(self) -> None:
         server.backend = FakeBackend()
 
@@ -132,8 +242,137 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         html = response.text
         self.assertIn("Backend Model", html)
+        self.assertIn("Available TransformerLens models", html)
+        self.assertIn("Research Runs", html)
+        self.assertIn("Inspect output", html)
+        self.assertIn("Reset defaults", html)
+        self.assertIn("Response mode", html)
+        self.assertIn("system_prompt", html)
+        self.assertIn("/api/inspect/tokens", html)
+        self.assertIn("steers_enabled", html)
+        self.assertIn("cache_model_id", html)
+        self.assertIn("cache_source_id", html)
+        self.assertIn("matched ${matchedLabels} cached", html)
+        self.assertIn("steering.uiConfig.v1", html)
+        self.assertIn("defaultResearchConfig", html)
+        self.assertIn("SAE Lens release or checkpoint collection", html)
         self.assertIn("Neuronpedia Sources", html)
+        self.assertIn("/api/model/options", html)
         self.assertIn("/api/model", html)
+
+    def test_model_options_list_transformerlens_models_with_size_estimates(self) -> None:
+        response = self.client.get("/api/model/options")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        gpt2 = next(row for row in body["models"] if row["model_name"] == "gpt2")
+        self.assertEqual(gpt2["load_name"], "gpt2-small")
+        self.assertIn("gpt2-small", gpt2["aliases"])
+        self.assertGreater(gpt2["estimated_download_bytes"], 0)
+        self.assertIn("MB", gpt2["download_size_label"])
+        self.assertIn("is_chat_model", gpt2)
+        self.assertEqual(body["count"], len(body["models"]))
+
+    def test_inspect_tokens_endpoint_returns_feature_hits(self) -> None:
+        backend = FakeBackend()
+        server.backend = backend
+        FeatureCache(self.cache_path).replace_source(
+            "fake-model",
+            "6-res-jb",
+            [
+                FeatureLabel(
+                    model_id="fake-model",
+                    source_id="6-res-jb",
+                    feature_id=204,
+                    description="weather and forecast phrases",
+                )
+            ],
+        )
+
+        response = self.client.post(
+            "/api/inspect/tokens",
+            json={
+                "text": " result",
+                "prompt": "Prompt:",
+                "layers": [6],
+                "top_k": 3,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["tokens"][0]["features"][0]["feature_id"], 204)
+        self.assertEqual(body["tokens"][0]["features"][0]["source_id"], "6-res-jb")
+        self.assertEqual(body["tokens"][0]["features"][0]["description"], "weather and forecast phrases")
+        self.assertEqual(
+            backend.requests[-1],
+            {
+                "text": " result",
+                "layers": [6],
+                "sae_id": None,
+                "top_k": 3,
+                "prompt": "Prompt:",
+                "include_prompt": False,
+                "mode": "auto",
+                "system_prompt": None,
+            },
+        )
+
+    def test_inspect_tokens_uses_requested_cache_model_and_source_for_labels(self) -> None:
+        backend = FakeBackend()
+        server.backend = backend
+        FeatureCache(self.cache_path).replace_source(
+            "gpt2-small",
+            "research-source",
+            [
+                FeatureLabel(
+                    model_id="gpt2-small",
+                    source_id="research-source",
+                    feature_id=204,
+                    description="selected cached feature label",
+                )
+            ],
+        )
+
+        response = self.client.post(
+            "/api/inspect/tokens",
+            json={
+                "text": " result",
+                "layers": [6],
+                "cache_model_id": "gpt2-small",
+                "cache_source_id": "research-source",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        feature = response.json()["tokens"][0]["features"][0]
+        self.assertEqual(feature["source_id"], "research-source")
+        self.assertEqual(feature["label_model_id"], "gpt2-small")
+        self.assertEqual(feature["description"], "selected cached feature label")
+        self.assertEqual(feature["label_lookup"]["status"], "cached")
+
+    def test_inspect_tokens_falls_back_to_same_layer_cached_sources(self) -> None:
+        backend = FakeBackend()
+        server.backend = backend
+        FeatureCache(self.cache_path).replace_source(
+            "fake-model",
+            "6-res-jb-alt",
+            [
+                FeatureLabel(
+                    model_id="fake-model",
+                    source_id="6-res-jb-alt",
+                    feature_id=204,
+                    description="same layer cached label",
+                )
+            ],
+        )
+
+        response = self.client.post("/api/inspect/tokens", json={"text": " result", "layers": [6]})
+
+        self.assertEqual(response.status_code, 200)
+        feature = response.json()["tokens"][0]["features"][0]
+        self.assertEqual(feature["source_id"], "6-res-jb-alt")
+        self.assertEqual(feature["description"], "same layer cached label")
 
     def test_state_api_sets_appends_and_clears_steers(self) -> None:
         server.backend = FakeBackend()

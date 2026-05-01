@@ -30,9 +30,58 @@ Layer shorthand maps to SAE Lens hook ids. For example:
 | `--layers 8` | `blocks.8.hook_resid_pre` | `gpt2-small/8-res-jb` |
 | `--layers 10` | `blocks.10.hook_resid_pre` | `gpt2-small/10-res-jb` |
 
-## Setup
+## Quick Start
 
-Use Python 3.12 when available:
+From a fresh clone, run one command:
+
+```bash
+./start.sh
+```
+
+`start.sh` is the production startup path. It:
+
+1. Finds Python 3.10+; Python 3.12 is preferred when available.
+2. Creates `.venv` if it does not exist.
+3. Installs or updates the Python package dependencies from `requirements.txt`
+   and the editable local package from `pyproject.toml`.
+4. Reuses the existing environment on future runs when dependencies are already
+   present and the dependency files have not changed.
+5. Starts the FastAPI web server in the foreground.
+
+Open `http://127.0.0.1:8000/` after the server logs that it is running. Stop
+the server with `Ctrl+C`. To keep it alive outside your current shell, run it
+inside tmux:
+
+```bash
+tmux new -s steering './start.sh'
+```
+
+The first startup downloads the default GPT-2 small model through
+TransformerLens. The first steered generation for a layer downloads that
+layer's SAE weights through SAE Lens. Later startups reuse the local package
+environment and the model/SAE caches.
+
+If Python is not auto-detected, set:
+
+```bash
+STEERING_PYTHON=/path/to/python ./start.sh
+```
+
+Use another port by passing normal `serve` options through `start.sh`:
+
+```bash
+./start.sh --port 8080
+```
+
+Or via environment variables:
+
+```bash
+STEERING_SERVER_HOST=127.0.0.1 STEERING_SERVER_PORT=8080 ./start.sh
+```
+
+## Manual Setup
+
+Manual setup is only needed for development or debugging the bootstrap process:
 
 ```bash
 python3.12 -m venv .venv
@@ -40,33 +89,11 @@ source .venv/bin/activate
 python -m pip install --upgrade pip setuptools wheel
 python -m pip install -r requirements.txt
 python -m pip install -e .
-```
-
-If `python3.12` is not on `PATH`, use your local Python 3 executable or set
-`STEERING_PYTHON=/path/to/python` before running `./start.sh`.
-After editable install, the `steer` console command is equivalent to
-`python steer.py`. Check the installed version with `steer --version`.
-
-The current environment has been verified with:
-
-```bash
-python -m unittest discover -s tests
-python steer.py doctor --skip-server
-python steer.py feature --layer 6 --feature-id 204
-python steer.py feature-cache sources --model-id gpt2-small --contains res-jb
-```
-
-## Start The Backend
-
-Terminal A:
-
-```bash
-source .venv/bin/activate
 python steer.py serve
 ```
 
-The first startup downloads GPT-2 small. The first steered generation for a
-layer downloads that layer's SAE weights.
+After editable install, the `steer` console command is equivalent to
+`python steer.py`. Check the installed version with `steer --version`.
 
 Check that the server is ready:
 
@@ -108,34 +135,12 @@ This uses an isolated temporary state file, checks `/health`, runs a baseline
 completion, applies feature `204` at layer `6`, runs a steered completion, then
 clears the temporary state.
 
-## Launch The Terminal Interface
+## Web Interface
 
-The primary demo path is the split-pane terminal UI:
+The FastAPI backend serves the browser UI at the server root:
 
 ```bash
 ./start.sh
-```
-
-`start.sh` creates/uses `.venv`, installs missing dependencies from
-`requirements.txt`, starts the TransformerLens backend if it is not already
-running, waits for `/health`, then opens the interface.
-
-The left pane is a text-completion surface for the current backend model. The
-default backend is raw `gpt2-small`, not a chat-tuned assistant, so use prompts
-that look like text to continue rather than questions expecting a helpful reply.
-For demos, the interface defaults to deterministic sampling and stops displayed
-output at the first paragraph break to avoid GPT-2 repetition loops.
-The right pane shows active steers, feature lookup controls, and the local
-feature-label cache. Steering changes are written to `.steering/state.json`;
-the backend reads that state during generation.
-
-## Launch The Web Interface
-
-The FastAPI backend also serves a browser UI at the server root:
-
-```bash
-source .venv/bin/activate
-python steer.py serve
 ```
 
 Open `http://127.0.0.1:8000/`.
@@ -166,40 +171,51 @@ Useful keys:
 | `F10` | Cache compatible residual JB layers for the selected model. |
 | `F11` | Search cached labels across compatible layers. |
 | `F12` | Apply the selected cached feature to the steer form. |
-| `Ctrl+C` | Quit the interface. |
+| `Ctrl+C` | Stop the server from the terminal where `./start.sh` is running. |
 
-## CLI Interface Demo
+## Terminal Interface
+
+The terminal UI is still available after the backend is running:
+
+```bash
+source .venv/bin/activate
+python steer.py ui
+```
+
+The terminal UI is a split-pane completion and steering surface. The default
+backend is raw `gpt2-small`, not a chat-tuned assistant, so use prompts that
+look like text to continue rather than questions expecting a helpful reply.
+
+## Web Demo
 
 Start from the repo root:
 
 ```bash
-git switch main
 ./start.sh
 ```
 
 The first run may download GPT-2 small and the first steered generation may
 download SAE Lens weights.
 
-Inside the interface:
+In the browser at `http://127.0.0.1:8000/`:
 
-1. In the left completion prompt, enter:
+1. In the prompt field, enter:
 
    ```text
    Today the weather report says
    ```
 
-2. In the right pane, set a manual steer:
+2. In `Active Steer`, set a manual steer:
 
    ```text
-   Feature: 204
+   Feature id: 204
    Strength: 10
    Layers: 6
    ```
 
-   Press `Set Only`.
+   Press `Set only`.
 
-3. Continue the same weather prompt again from the left pane and compare the
-   continuation with the baseline.
+3. Press `Baseline`, then `Generate`, and compare the saved research runs.
 
 4. Try the cache workflow:
 
@@ -208,14 +224,12 @@ Inside the interface:
    Search: time phrases
    ```
 
-   Press `F10` or `Cache Layers` to cache compatible `0-res-jb` through
-   `11-res-jb` sources. You can also press `Search` directly; if the compatible
-   layer cache has not been prepared yet, the UI caches it first and continues
-   the search afterward. Results show `feature // layer // label`. Select a
-   result, then press `Apply` to copy its model/source/feature label into the
+   Press `Cache Layers`, or search directly after caching a source. Results
+   show feature ids, SAE sources, and local cached labels. Select a result, then
+   press `Apply selected label` to copy its model/source/feature label into the
    steer form.
 
-5. Press `Clear All` before ending the demo so no steer is left active.
+5. Press `Clear` before ending the demo so no steer is left active.
 
 ## Smoke Test
 
@@ -512,20 +526,26 @@ python steer.py feature-cache download \
 
 ## tmux Workflow
 
-Optional tmux sessions:
+Start the web server in a tmux session:
 
 ```bash
-tmux attach -t steering-backend
+tmux new -s steering './start.sh'
+```
+
+Reattach later:
+
+```bash
+tmux attach -t steering
 ```
 
 Recommended usage:
 
 | Session | Purpose |
 |---------|---------|
-| `steering-backend` | Keep `python steer.py serve` running. |
+| `steering` | Keep `./start.sh` / `python steer.py serve` running. |
 
-`./start.sh` starts the backend automatically when it is not already running,
-so tmux is optional for normal demos.
+tmux is optional; `./start.sh` can also run directly in any terminal until it is
+stopped with `Ctrl+C`.
 
 ## Configuration
 
@@ -543,6 +563,7 @@ Environment variables:
 | `STEERING_SERVER_HOST` | `127.0.0.1` | Host used by `./start.sh` when starting uvicorn. |
 | `STEERING_SERVER_PORT` | `8000` | Port used by `./start.sh` when starting uvicorn. |
 | `STEERING_PYTHON` | auto-detected | Python interpreter used by `./start.sh` when creating `.venv`. |
+| `STEERING_VENV_DIR` | `.venv` | Virtual environment directory created/used by `./start.sh`. |
 | `STEERING_CLIENT_TIMEOUT` | `60` | Seconds before a CLI/UI request gives up. |
 | `STEERING_GENERATION_LOCK_TIMEOUT` | `30` | Seconds a generation waits for another token compute to finish. |
 | `STEERING_NEURONPEDIA_TIMEOUT` | `120` | Seconds before feature API requests give up. |
