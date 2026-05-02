@@ -661,7 +661,7 @@ WEB_UI_HTML = r"""<!doctype html>
       top: 0;
       z-index: 5;
       display: grid;
-      grid-template-columns: minmax(240px, 1fr) minmax(360px, auto);
+      grid-template-columns: minmax(240px, 1fr) auto minmax(360px, auto);
       gap: 18px;
       align-items: center;
       padding: 10px 18px;
@@ -712,6 +712,40 @@ WEB_UI_HTML = r"""<!doctype html>
       grid-template-columns: repeat(4, minmax(76px, auto));
       gap: 8px;
       justify-content: end;
+    }
+
+    .layout-controls {
+      display: inline-flex;
+      gap: 7px;
+      justify-self: end;
+      align-items: center;
+    }
+
+    .icon-button {
+      display: inline-grid;
+      place-items: center;
+      width: 34px;
+      min-width: 34px;
+      padding: 0;
+      color: #22312e;
+    }
+
+    .icon-button svg {
+      width: 18px;
+      height: 18px;
+      stroke: currentColor;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      fill: none;
+      pointer-events: none;
+    }
+
+    .icon-button[aria-pressed="true"] {
+      border-color: var(--accent);
+      background: var(--accent-soft);
+      color: var(--accent-strong);
+      box-shadow: 0 0 0 3px rgba(15, 118, 110, .11);
     }
 
     .metric {
@@ -769,6 +803,97 @@ WEB_UI_HTML = r"""<!doctype html>
       border-radius: var(--radius);
       box-shadow: var(--shadow);
       overflow: hidden;
+    }
+
+    main.window-layout-canvas {
+      position: relative;
+      display: block;
+      width: 100%;
+      max-width: none;
+      min-height: calc(100vh - 66px);
+      margin: 0;
+    }
+
+    main.window-layout-canvas .stack {
+      display: contents;
+    }
+
+    main.window-layout-canvas .window-panel {
+      position: absolute;
+      display: flex;
+      min-width: 280px;
+      min-height: 180px;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    main.window-layout-canvas .window-panel .panel-body {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow: auto;
+    }
+
+    body.window-layout-editing {
+      user-select: none;
+    }
+
+    body.window-layout-editing main.window-layout-canvas .window-panel {
+      outline: 2px solid rgba(15, 118, 110, .24);
+      outline-offset: 2px;
+    }
+
+    body.window-layout-editing main.window-layout-canvas .window-panel .panel-header {
+      cursor: move;
+    }
+
+    body.window-layout-editing main.window-layout-canvas .window-panel .panel-header button,
+    body.window-layout-editing main.window-layout-canvas .window-panel .panel-header input,
+    body.window-layout-editing main.window-layout-canvas .window-panel .panel-header select {
+      cursor: pointer;
+    }
+
+    .resize-handle {
+      position: absolute;
+      z-index: 4;
+      display: none;
+      width: 22px;
+      height: 22px;
+      min-width: 0;
+      min-height: 0;
+      border: 0;
+      background: transparent;
+      padding: 0;
+    }
+
+    body.window-layout-editing main.window-layout-canvas .resize-handle {
+      display: block;
+    }
+
+    .resize-handle:hover:not(:disabled) {
+      background: transparent;
+    }
+
+    .resize-handle::after {
+      content: "";
+      position: absolute;
+      width: 8px;
+      height: 8px;
+      border-color: var(--accent-strong);
+      opacity: .8;
+    }
+
+    .resize-handle.nw { top: 0; left: 0; cursor: nwse-resize; }
+    .resize-handle.ne { top: 0; right: 0; cursor: nesw-resize; }
+    .resize-handle.sw { bottom: 0; left: 0; cursor: nesw-resize; }
+    .resize-handle.se { right: 0; bottom: 0; cursor: nwse-resize; }
+    .resize-handle.nw::after { top: 4px; left: 4px; border-top: 2px solid; border-left: 2px solid; }
+    .resize-handle.ne::after { top: 4px; right: 4px; border-top: 2px solid; border-right: 2px solid; }
+    .resize-handle.sw::after { bottom: 4px; left: 4px; border-bottom: 2px solid; border-left: 2px solid; }
+    .resize-handle.se::after { right: 4px; bottom: 4px; border-right: 2px solid; border-bottom: 2px solid; }
+
+    body.window-layout-dragging,
+    body.window-layout-dragging * {
+      cursor: grabbing !important;
     }
 
     .panel-header {
@@ -1305,7 +1430,8 @@ WEB_UI_HTML = r"""<!doctype html>
     @media (max-width: 1180px) {
       main,
       main.research-workspace { grid-template-columns: 1fr; }
-      .app-bar { grid-template-columns: 1fr; }
+      .app-bar { grid-template-columns: 1fr auto; }
+      .health-grid { grid-column: 1 / -1; }
       .health-grid { justify-content: stretch; grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .metric strong { max-width: none; }
     }
@@ -1343,6 +1469,24 @@ WEB_UI_HTML = r"""<!doctype html>
         <div id="health">Checking backend...</div>
       </div>
     </div>
+    <div class="layout-controls" aria-label="Window layout controls">
+      <button class="secondary icon-button" id="moveWindows" type="button" aria-pressed="false" aria-label="Move and resize windows" title="Move and resize windows">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 2v20"></path>
+          <path d="m15 19-3 3-3-3"></path>
+          <path d="m9 5 3-3 3 3"></path>
+          <path d="M2 12h20"></path>
+          <path d="m5 9-3 3 3 3"></path>
+          <path d="m19 9 3 3-3 3"></path>
+        </svg>
+      </button>
+      <button class="secondary icon-button" id="resetWindowLayout" type="button" aria-label="Reset window layout" title="Reset window layout">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M3 12a9 9 0 1 0 3-6.7"></path>
+          <path d="M3 4v6h6"></path>
+        </svg>
+      </button>
+    </div>
     <div class="health-grid" aria-label="Backend status">
       <div class="metric"><span>Model</span><strong id="healthModel">-</strong></div>
       <div class="metric"><span>Device</span><strong id="healthDevice">-</strong></div>
@@ -1351,9 +1495,9 @@ WEB_UI_HTML = r"""<!doctype html>
     </div>
   </header>
 
-  <main class="research-workspace">
+  <main id="workspace" class="research-workspace">
     <div class="stack primary-stack">
-      <section class="panel generate-panel" aria-labelledby="generateTitle">
+      <section class="panel generate-panel window-panel" data-window-id="generate" aria-labelledby="generateTitle">
         <div class="panel-header">
           <div>
             <h2 id="generateTitle">Generate</h2>
@@ -1435,7 +1579,7 @@ WEB_UI_HTML = r"""<!doctype html>
         </div>
       </section>
 
-      <section class="panel research-panel" aria-labelledby="researchTitle">
+      <section class="panel research-panel window-panel" data-window-id="research" aria-labelledby="researchTitle">
         <div class="panel-header">
           <div>
             <h2 id="researchTitle">Research Runs</h2>
@@ -1464,7 +1608,7 @@ WEB_UI_HTML = r"""<!doctype html>
     </div>
 
     <div class="stack side-stack">
-      <section class="panel model-panel" aria-labelledby="modelTitle">
+      <section class="panel model-panel window-panel" data-window-id="model" aria-labelledby="modelTitle">
         <div class="panel-header">
           <div>
             <h2 id="modelTitle">Backend Model</h2>
@@ -1508,7 +1652,7 @@ WEB_UI_HTML = r"""<!doctype html>
         </div>
       </section>
 
-      <section class="panel" aria-labelledby="steerTitle">
+      <section class="panel window-panel" data-window-id="steer" aria-labelledby="steerTitle">
         <div class="panel-header">
           <div>
             <h2 id="steerTitle">Active Steer</h2>
@@ -1555,7 +1699,7 @@ WEB_UI_HTML = r"""<!doctype html>
         </div>
       </section>
 
-      <section class="panel" aria-labelledby="sourcesTitle">
+      <section class="panel window-panel" data-window-id="sources" aria-labelledby="sourcesTitle">
         <div class="panel-header">
           <div>
             <h2 id="sourcesTitle">Neuronpedia Sources</h2>
@@ -1590,7 +1734,7 @@ WEB_UI_HTML = r"""<!doctype html>
         </div>
       </section>
 
-      <section class="panel" aria-labelledby="searchTitle">
+      <section class="panel window-panel" data-window-id="search" aria-labelledby="searchTitle">
         <div class="panel-header">
           <div>
             <h2 id="searchTitle">Search Cached Labels</h2>
@@ -1627,6 +1771,11 @@ WEB_UI_HTML = r"""<!doctype html>
     const residualSourcePattern = /^(\d+)-res-jb$/;
     const researchStorageKey = 'steering.researchRuns.v1';
     const uiConfigStorageKey = 'steering.uiConfig.v1';
+    const windowLayoutStorageKey = 'steering.windowLayout.v1';
+    const windowLayoutVersion = 1;
+    const windowResizeDirections = ['nw', 'ne', 'sw', 'se'];
+    const minWindowWidth = 280;
+    const minWindowHeight = 180;
     const defaultResearchConfig = {
       prompt: 'Today the weather report says',
       maxTokens: '40',
@@ -1690,6 +1839,9 @@ WEB_UI_HTML = r"""<!doctype html>
     let generationController = null;
     let lastInspection = null;
     let tokenPopoverTimer = null;
+    let windowLayoutActive = false;
+    let windowMoveMode = false;
+    let windowZCounter = 10;
 
     async function api(path, options = {}) {
       const response = await fetch(path, {
@@ -1775,6 +1927,291 @@ WEB_UI_HTML = r"""<!doctype html>
       resetTokenInspection();
       setStatus('generateStatus', 'Research defaults restored.', 'ok');
       setStatus('modelStatus', 'Defaults prepared for gpt2-small residual SAE workflows.', 'ok');
+    }
+
+    function workspaceNode() {
+      return $('workspace');
+    }
+
+    function windowPanels() {
+      return Array.from(document.querySelectorAll('.window-panel[data-window-id]'));
+    }
+
+    function clamp(value, min, max) {
+      return Math.min(max, Math.max(min, value));
+    }
+
+    function numericStyle(node, property, fallback = 0) {
+      const value = Number.parseFloat(node.style[property]);
+      return Number.isFinite(value) ? value : fallback;
+    }
+
+    function readSavedWindowLayout() {
+      try {
+        const layout = JSON.parse(localStorage.getItem(windowLayoutStorageKey) || 'null');
+        if (!layout || layout.version !== windowLayoutVersion || typeof layout.windows !== 'object') return null;
+        return layout;
+      } catch {
+        return null;
+      }
+    }
+
+    function windowPanelMetrics(panel) {
+      const workspace = workspaceNode();
+      const workspaceRect = workspace.getBoundingClientRect();
+      const rect = panel.getBoundingClientRect();
+      return {
+        left: numericStyle(panel, 'left', rect.left - workspaceRect.left + workspace.scrollLeft),
+        top: numericStyle(panel, 'top', rect.top - workspaceRect.top + workspace.scrollTop),
+        width: numericStyle(panel, 'width', rect.width),
+        height: numericStyle(panel, 'height', rect.height),
+        z: Number.parseInt(panel.style.zIndex || '0', 10) || 1
+      };
+    }
+
+    function captureCurrentWindowLayout() {
+      const windows = {};
+      for (const [index, panel] of windowPanels().entries()) {
+        const metrics = windowPanelMetrics(panel);
+        windows[panel.dataset.windowId] = {
+          left: Math.max(0, Math.round(metrics.left)),
+          top: Math.max(0, Math.round(metrics.top)),
+          width: Math.max(minWindowWidth, Math.round(metrics.width)),
+          height: Math.max(minWindowHeight, Math.round(metrics.height)),
+          z: Number(metrics.z) || index + 1
+        };
+      }
+      return {
+        version: windowLayoutVersion,
+        saved_at: new Date().toISOString(),
+        viewport: {width: window.innerWidth, height: window.innerHeight},
+        windows
+      };
+    }
+
+    function applyWindowPanelMetrics(panel, metrics) {
+      const workspace = workspaceNode();
+      const workspaceWidth = Math.max(workspace.clientWidth, minWindowWidth + 36);
+      const maxWidth = Math.max(minWindowWidth, workspaceWidth - 36);
+      const width = clamp(Number(metrics.width) || minWindowWidth, minWindowWidth, maxWidth);
+      const height = Math.max(minWindowHeight, Number(metrics.height) || minWindowHeight);
+      const maxLeft = Math.max(0, workspaceWidth - width - 18);
+      const left = clamp(Number(metrics.left) || 0, 0, maxLeft);
+      const top = Math.max(0, Number(metrics.top) || 0);
+      panel.style.left = `${Math.round(left)}px`;
+      panel.style.top = `${Math.round(top)}px`;
+      panel.style.width = `${Math.round(width)}px`;
+      panel.style.height = `${Math.round(height)}px`;
+      panel.style.zIndex = String(Number(metrics.z) || 1);
+    }
+
+    function updateWindowWorkspaceBounds() {
+      if (!windowLayoutActive) return;
+      const workspace = workspaceNode();
+      const viewportSpace = Math.max(420, window.innerHeight - workspace.getBoundingClientRect().top);
+      const bottom = windowPanels().reduce((max, panel) => {
+        const metrics = windowPanelMetrics(panel);
+        return Math.max(max, metrics.top + metrics.height);
+      }, 0);
+      workspace.style.minHeight = `${Math.ceil(Math.max(viewportSpace, bottom + 28))}px`;
+    }
+
+    function applyWindowLayout(layout, fallbackLayout = null) {
+      const workspace = workspaceNode();
+      workspace.classList.add('window-layout-canvas');
+      document.body.classList.add('window-layout-active');
+      windowLayoutActive = true;
+      let maxZ = 1;
+      for (const [index, panel] of windowPanels().entries()) {
+        const id = panel.dataset.windowId;
+        const metrics = layout.windows[id] || fallbackLayout?.windows?.[id] || captureCurrentWindowLayout().windows[id];
+        applyWindowPanelMetrics(panel, {...metrics, z: metrics.z || index + 1});
+        maxZ = Math.max(maxZ, Number(metrics.z) || index + 1);
+      }
+      windowZCounter = Math.max(windowZCounter, maxZ + 1);
+      updateWindowWorkspaceBounds();
+    }
+
+    function ensureWindowLayout() {
+      if (windowLayoutActive) return;
+      const fallbackLayout = captureCurrentWindowLayout();
+      applyWindowLayout(readSavedWindowLayout() || fallbackLayout, fallbackLayout);
+    }
+
+    function saveWindowLayout() {
+      if (!windowLayoutActive) return;
+      const layout = captureCurrentWindowLayout();
+      localStorage.setItem(windowLayoutStorageKey, JSON.stringify(layout));
+    }
+
+    function clearWindowLayoutStyles() {
+      const workspace = workspaceNode();
+      workspace.classList.remove('window-layout-canvas');
+      workspace.style.minHeight = '';
+      document.body.classList.remove('window-layout-active', 'window-layout-editing', 'window-layout-dragging');
+      for (const panel of windowPanels()) {
+        panel.style.left = '';
+        panel.style.top = '';
+        panel.style.width = '';
+        panel.style.height = '';
+        panel.style.zIndex = '';
+      }
+      windowLayoutActive = false;
+      windowMoveMode = false;
+      updateWindowLayoutControls();
+    }
+
+    function restoreSavedWindowLayout() {
+      const saved = readSavedWindowLayout();
+      if (!saved) {
+        updateWindowLayoutControls();
+        return;
+      }
+      applyWindowLayout(saved, captureCurrentWindowLayout());
+      setWindowMoveMode(false);
+    }
+
+    function updateWindowLayoutControls() {
+      const button = $('moveWindows');
+      button.setAttribute('aria-pressed', String(windowMoveMode));
+      button.title = windowMoveMode ? 'Lock window layout' : 'Move and resize windows';
+      button.setAttribute('aria-label', button.title);
+    }
+
+    function setWindowMoveMode(enabled) {
+      if (enabled) ensureWindowLayout();
+      windowMoveMode = enabled;
+      document.body.classList.toggle('window-layout-editing', enabled);
+      updateWindowLayoutControls();
+      if (!enabled && !readSavedWindowLayout()) clearWindowLayoutStyles();
+    }
+
+    function resetWindowLayout() {
+      localStorage.removeItem(windowLayoutStorageKey);
+      clearWindowLayoutStyles();
+      setStatus('generateStatus', 'Window layout reset.', 'ok');
+    }
+
+    function bringWindowToFront(panel) {
+      windowZCounter += 1;
+      panel.style.zIndex = String(windowZCounter);
+    }
+
+    function isInteractiveWindowTarget(target) {
+      return target instanceof Element && Boolean(target.closest('button, input, select, textarea, a, summary, label, .resize-handle'));
+    }
+
+    function startWindowDrag(event) {
+      if (!windowMoveMode || event.button !== 0 || isInteractiveWindowTarget(event.target)) return;
+      const panel = event.currentTarget.closest('.window-panel');
+      if (!panel) return;
+      event.preventDefault();
+      bringWindowToFront(panel);
+      const start = windowPanelMetrics(panel);
+      const startX = event.clientX;
+      const startY = event.clientY;
+      document.body.classList.add('window-layout-dragging');
+
+      const move = (moveEvent) => {
+        const left = start.left + moveEvent.clientX - startX;
+        const top = start.top + moveEvent.clientY - startY;
+        applyWindowPanelMetrics(panel, {...start, left, top, z: windowZCounter});
+        updateWindowWorkspaceBounds();
+      };
+      const stop = () => {
+        document.removeEventListener('pointermove', move);
+        document.body.classList.remove('window-layout-dragging');
+        saveWindowLayout();
+      };
+
+      document.addEventListener('pointermove', move);
+      document.addEventListener('pointerup', stop, {once: true});
+    }
+
+    function resizedWindowMetrics(direction, start, dx, dy) {
+      let {left, top, width, height} = start;
+      if (direction.includes('e')) width = start.width + dx;
+      if (direction.includes('s')) height = start.height + dy;
+      if (direction.includes('w')) {
+        width = start.width - dx;
+        left = start.left + dx;
+      }
+      if (direction.includes('n')) {
+        height = start.height - dy;
+        top = start.top + dy;
+      }
+      if (width < minWindowWidth) {
+        if (direction.includes('w')) left -= minWindowWidth - width;
+        width = minWindowWidth;
+      }
+      if (height < minWindowHeight) {
+        if (direction.includes('n')) top -= minWindowHeight - height;
+        height = minWindowHeight;
+      }
+      if (left < 0) {
+        if (direction.includes('w')) width += left;
+        left = 0;
+      }
+      if (top < 0) {
+        if (direction.includes('n')) height += top;
+        top = 0;
+      }
+      return {left, top, width, height, z: start.z};
+    }
+
+    function startWindowResize(event) {
+      if (!windowMoveMode || event.button !== 0) return;
+      const panel = event.currentTarget.closest('.window-panel');
+      if (!panel) return;
+      event.preventDefault();
+      event.stopPropagation();
+      bringWindowToFront(panel);
+      const direction = event.currentTarget.dataset.resize;
+      const start = {...windowPanelMetrics(panel), z: windowZCounter};
+      const startX = event.clientX;
+      const startY = event.clientY;
+
+      const move = (moveEvent) => {
+        const dx = moveEvent.clientX - startX;
+        const dy = moveEvent.clientY - startY;
+        applyWindowPanelMetrics(panel, resizedWindowMetrics(direction, start, dx, dy));
+        updateWindowWorkspaceBounds();
+      };
+      const stop = () => {
+        document.removeEventListener('pointermove', move);
+        saveWindowLayout();
+      };
+
+      document.addEventListener('pointermove', move);
+      document.addEventListener('pointerup', stop, {once: true});
+    }
+
+    function clampWindowLayoutToViewport() {
+      if (!windowLayoutActive) return;
+      for (const panel of windowPanels()) {
+        applyWindowPanelMetrics(panel, windowPanelMetrics(panel));
+      }
+      updateWindowWorkspaceBounds();
+    }
+
+    function setupWindowChrome() {
+      for (const panel of windowPanels()) {
+        const header = panel.querySelector('.panel-header');
+        if (header && !header.dataset.windowDragReady) {
+          header.addEventListener('pointerdown', startWindowDrag);
+          header.dataset.windowDragReady = 'true';
+        }
+        for (const direction of windowResizeDirections) {
+          if (panel.querySelector(`.resize-handle.${direction}`)) continue;
+          const handle = document.createElement('button');
+          handle.type = 'button';
+          handle.className = `resize-handle ${direction}`;
+          handle.dataset.resize = direction;
+          handle.setAttribute('aria-label', `Resize ${panel.dataset.windowId} window`);
+          handle.addEventListener('pointerdown', startWindowResize);
+          panel.appendChild(handle);
+        }
+      }
     }
 
     function setupFieldHelp() {
@@ -2835,8 +3272,12 @@ WEB_UI_HTML = r"""<!doctype html>
     }
 
     setupFieldHelp();
+    setupWindowChrome();
     loadUiConfig();
+    restoreSavedWindowLayout();
 
+    $('moveWindows').addEventListener('click', () => setWindowMoveMode(!windowMoveMode));
+    $('resetWindowLayout').addEventListener('click', resetWindowLayout);
     $('generate').addEventListener('click', () => generate({mode: 'steered', steersEnabled: true}));
     $('generateBaseline').addEventListener('click', generateBaseline);
     $('compareRuns').addEventListener('click', compareRuns);
@@ -2883,6 +3324,7 @@ WEB_UI_HTML = r"""<!doctype html>
       }
       if (event.key === 'Escape') stopGenerate();
     });
+    window.addEventListener('resize', clampWindowLayoutToViewport);
 
     refreshHealth();
     refreshState().catch(() => {});

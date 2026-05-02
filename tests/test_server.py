@@ -254,6 +254,8 @@ class ServerTests(unittest.TestCase):
         self.assertIn("cache_source_id", html)
         self.assertIn("matched ${matchedLabels} cached", html)
         self.assertIn("steering.uiConfig.v1", html)
+        self.assertIn("steering.windowLayout.v1", html)
+        self.assertIn("Move and resize windows", html)
         self.assertIn("defaultResearchConfig", html)
         self.assertIn("SAE Lens release or checkpoint collection", html)
         self.assertIn("Neuronpedia Sources", html)
